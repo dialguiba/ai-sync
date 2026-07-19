@@ -39,6 +39,9 @@ func RunWithBuildInfo(workdir string, args []string, build BuildInfo) (string, e
 	if len(args) > 0 && args[0] == "convention" {
 		return conventionText(), nil
 	}
+	if len(args) > 0 && args[0] == "list" {
+		return listGeneratedFiles(workdir, args[1:])
+	}
 	if wantsVersion(args) {
 		return versionText(build), nil
 	}
@@ -53,13 +56,17 @@ func RunWithBuildInfo(workdir string, args []string, build BuildInfo) (string, e
 	flags.StringVar(&opts.target, "target", "", "target to generate: claude, codex, or kiro")
 	flags.BoolVar(&opts.dryRun, "dry-run", false, "show changes without writing")
 	if err := flags.Parse(args); err != nil {
-		return strings.TrimSpace(flagOutput.String()), err
+		output := flagOutput.String()
+		if errors.Is(err, flag.ErrHelp) {
+			return output, nil
+		}
+		return strings.TrimSpace(output), err
 	}
 	if flags.NArg() > 0 {
 		return "", fmt.Errorf("unknown command %q", flags.Arg(0))
 	}
 
-	source, err := loadSource(workdir)
+	outputs, err := renderOutputs(workdir, opts.target)
 	if err != nil {
 		return "", err
 	}
@@ -68,16 +75,6 @@ func RunWithBuildInfo(workdir string, args []string, build BuildInfo) (string, e
 	if err != nil {
 		return "", err
 	}
-
-	var outputs []generatedFile
-	for _, target := range targets {
-		targetOutputs, err := renderTarget(target, source)
-		if err != nil {
-			return "", err
-		}
-		outputs = append(outputs, targetOutputs...)
-	}
-	outputs = appendGeneratedManifests(outputs)
 
 	changes, err := applyOutputs(workdir, outputs, opts.dryRun)
 	if err != nil {
@@ -92,6 +89,35 @@ func RunWithBuildInfo(workdir string, args []string, build BuildInfo) (string, e
 		return "no changes\n", nil
 	}
 	return strings.Join(changes, "\n") + "\n", nil
+}
+
+func listGeneratedFiles(workdir string, args []string) (string, error) {
+	var opts options
+	flags := flag.NewFlagSet("ai-sync list", flag.ContinueOnError)
+	var flagOutput bytes.Buffer
+	flags.SetOutput(&flagOutput)
+	flags.StringVar(&opts.target, "target", "", "target to list: claude, codex, or kiro")
+	if err := flags.Parse(args); err != nil {
+		output := flagOutput.String()
+		if errors.Is(err, flag.ErrHelp) {
+			return output, nil
+		}
+		return strings.TrimSpace(output), err
+	}
+	if flags.NArg() > 0 {
+		return "", fmt.Errorf("unknown list argument %q", flags.Arg(0))
+	}
+
+	outputs, err := renderOutputs(workdir, opts.target)
+	if err != nil {
+		return "", err
+	}
+	paths := make([]string, 0, len(outputs))
+	for _, output := range outputs {
+		paths = append(paths, filepath.ToSlash(output.Path))
+	}
+	sort.Strings(paths)
+	return strings.Join(paths, "\n") + "\n", nil
 }
 
 func wantsVersion(args []string) bool {
@@ -119,11 +145,13 @@ Usage:
   ai-sync [--target claude|codex|kiro] [--dry-run]
   ai-sync init
   ai-sync convention
+  ai-sync list
   ai-sync version
 
 Commands:
   init              scaffold a starter .ai/ directory
   convention        print the .ai authoring convention for humans or AI agents
+  list              print generated file paths without writing files
   version           print version and build metadata
 
 Options:
@@ -135,6 +163,7 @@ Options:
 Examples:
   ai-sync init
   ai-sync convention
+  ai-sync list
   ai-sync version
   ai-sync
   ai-sync --target codex
@@ -461,6 +490,28 @@ func selectedTargets(target string) ([]string, error) {
 		}
 	}
 	return nil, fmt.Errorf("unknown target %q; expected claude, codex, or kiro", target)
+}
+
+func renderOutputs(workdir, target string) ([]generatedFile, error) {
+	source, err := loadSource(workdir)
+	if err != nil {
+		return nil, err
+	}
+
+	targets, err := selectedTargets(target)
+	if err != nil {
+		return nil, err
+	}
+
+	var outputs []generatedFile
+	for _, target := range targets {
+		targetOutputs, err := renderTarget(target, source)
+		if err != nil {
+			return nil, err
+		}
+		outputs = append(outputs, targetOutputs...)
+	}
+	return appendGeneratedManifests(outputs), nil
 }
 
 func renderTarget(target string, source source) ([]generatedFile, error) {

@@ -21,8 +21,10 @@ func TestHelpShowsCommandsAndOptions(t *testing.T) {
 		"Usage:",
 		"ai-sync init",
 		"ai-sync convention",
+		"ai-sync list",
 		"ai-sync version",
 		"convention        print the .ai authoring convention",
+		"list              print generated file paths",
 		"version           print version and build metadata",
 		"--target claude|codex|kiro",
 		"--dry-run",
@@ -99,6 +101,78 @@ func TestInitCreatesCanonicalSource(t *testing.T) {
 		".ai/skills/example/SKILL.md",
 	} {
 		assertFileExists(t, filepath.Join(dir, path))
+	}
+}
+
+func TestListHelpReturnsSuccess(t *testing.T) {
+	dir := t.TempDir()
+
+	out, err := app.Run(dir, []string{"list", "--help"})
+	if err != nil {
+		t.Fatalf("list help should not return an error: %v", err)
+	}
+	for _, want := range []string{
+		"Usage of ai-sync list",
+		"target to list: claude, codex, or kiro",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("expected list help to contain %q, got:\n%s", want, out)
+		}
+	}
+}
+
+func TestListShowsGeneratedFilesWithoutWritingThem(t *testing.T) {
+	dir := t.TempDir()
+	writeCanonicalSource(t, dir)
+
+	out, err := app.Run(dir, []string{"list"})
+	if err != nil {
+		t.Fatalf("list should not return an error: %v", err)
+	}
+	for _, want := range []string{
+		"CLAUDE.md",
+		".claude/settings.json",
+		".mcp.json",
+		".claude/skills/playwright-cli/SKILL.md",
+		"AGENTS.md",
+		".codex/config.toml",
+		".agents/skills/playwright-cli/SKILL.md",
+		".kiro/steering/project-conventions.md",
+		".kiro/settings/mcp.json",
+		".kiro/powers/playwright-cli/POWER.md",
+	} {
+		if !strings.Contains(out, want+"\n") {
+			t.Fatalf("expected list output to contain %q as a line, got:\n%s", want, out)
+		}
+	}
+	assertFileMissing(t, filepath.Join(dir, "CLAUDE.md"))
+	assertFileMissing(t, filepath.Join(dir, "AGENTS.md"))
+}
+
+func TestListSupportsTargetFlag(t *testing.T) {
+	dir := t.TempDir()
+	writeCanonicalSource(t, dir)
+
+	out, err := app.Run(dir, []string{"list", "--target", "codex"})
+	if err != nil {
+		t.Fatalf("targeted list should not return an error: %v", err)
+	}
+	for _, want := range []string{
+		"AGENTS.md\n",
+		".codex/config.toml\n",
+		".agents/skills/playwright-cli/SKILL.md\n",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("expected targeted list to contain %q, got:\n%s", want, out)
+		}
+	}
+	for _, unwanted := range []string{
+		"CLAUDE.md\n",
+		".kiro/steering/project-conventions.md\n",
+	} {
+		if strings.Contains(out, unwanted) {
+			t.Fatalf("expected targeted list not to contain %q, got:\n%s", unwanted, out)
+		}
 	}
 }
 

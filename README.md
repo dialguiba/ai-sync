@@ -115,6 +115,7 @@ ai-sync convention  # print the .ai authoring convention for an AI agent
 ai-sync version     # print version and build metadata
 ai-sync             # generate Claude, Codex, and Kiro files
 ai-sync --dry-run   # preview changes without writing files
+ai-sync list        # list generated file paths without writing files
 ```
 
 Generate only one target when needed:
@@ -196,6 +197,13 @@ Use `.ai/targets/<target>.md` only for instructions that apply to one agent.
 | `.ai/targets/kiro.md` | Kiro-specific steering guidance |
 
 If the same rule appears in more than one target file, it probably belongs in `.ai/project.md` instead.
+
+List generated file paths without writing files:
+
+```sh
+ai-sync list
+ai-sync list --target codex
+```
 
 ### 🧭 Path-scoped rules
 
@@ -308,6 +316,7 @@ go run ./cmd/ai-sync init
 go run ./cmd/ai-sync
 go run ./cmd/ai-sync --target codex
 go run ./cmd/ai-sync --dry-run
+go run ./cmd/ai-sync list
 ```
 
 ## 🚧 Current limitations
