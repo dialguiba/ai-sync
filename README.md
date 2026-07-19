@@ -29,7 +29,7 @@ Use `ai-sync` when a repository needs consistent instructions across multiple AI
 ## 📦 Install
 
 ```sh
-go install github.com/dialguiba/ai-sync/cmd/ai-sync@main
+go install github.com/dialguiba/ai-sync/cmd/ai-sync@latest
 ```
 
 Make sure Go's bin directory is in your `PATH`.
@@ -69,10 +69,10 @@ ai-sync --help
 
 ## 🔼 Update
 
-Update `ai-sync` by installing from `main` again:
+Update `ai-sync` by running the install command again:
 
 ```sh
-go install github.com/dialguiba/ai-sync/cmd/ai-sync@main
+go install github.com/dialguiba/ai-sync/cmd/ai-sync@latest
 ```
 
 Verify the installed binary:
@@ -83,7 +83,7 @@ ai-sync --help
 go version -m "$(which ai-sync)"
 ```
 
-The module path should point to `github.com/dialguiba/ai-sync`. The version should reference the latest `main` commit.
+The module path should point to `github.com/dialguiba/ai-sync`, and the version should match the latest release tag.
 
 ## ⚡ Quick start
 
