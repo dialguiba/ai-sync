@@ -98,8 +98,8 @@ Prebuilt binaries are also attached to each GitHub Release for macOS, Linux, and
 Maintainers publish a new release by pushing a SemVer tag:
 
 ```sh
-git tag v0.1.2
-git push origin v0.1.2
+git tag vX.Y.Z
+git push origin vX.Y.Z
 ```
 
 GitHub Actions runs GoReleaser on `v*` tags and uploads archives plus `checksums.txt` to the GitHub Release.
