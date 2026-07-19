@@ -91,6 +91,19 @@ go version -m "$(which ai-sync)"
 
 The module path should point to `github.com/dialguiba/ai-sync`, and the version should match the latest release tag.
 
+Prebuilt binaries are also attached to each GitHub Release for macOS, Linux, and Windows on `amd64` and `arm64`.
+
+## 🚢 Releasing
+
+Maintainers publish a new release by pushing a SemVer tag:
+
+```sh
+git tag v0.1.2
+git push origin v0.1.2
+```
+
+GitHub Actions runs GoReleaser on `v*` tags and uploads archives plus `checksums.txt` to the GitHub Release.
+
 ## ⚡ Quick start
 
 Run these commands inside the repository you want to configure:
