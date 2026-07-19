@@ -355,7 +355,7 @@ Use atomic design for UI components.
 	}
 
 	rulePath := filepath.Join(dir, ".kiro/steering/frontend.md")
-	assertFileContains(t, rulePath, "---\ninclusion: fileMatch\nfileMatchPattern:\n  - \"frontend/**\"\n  - \"src/**/*.tsx\"\n---")
+	assertFileContains(t, rulePath, "---\ninclusion: fileMatch\nfileMatchPattern: [\"frontend/**\", \"src/**/*.tsx\"]\n---")
 	assertFileContains(t, rulePath, "Use atomic design for UI components.")
 	assertFileNotContains(t, filepath.Join(dir, ".kiro/steering/project-conventions.md"), "## Path-Scoped Rules")
 }

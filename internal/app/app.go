@@ -587,13 +587,14 @@ func renderKiro(source source) ([]generatedFile, error) {
 
 func renderKiroSteeringRule(rule pathRule) []byte {
 	var b strings.Builder
-	b.WriteString("---\ninclusion: fileMatch\nfileMatchPattern:\n")
-	for _, path := range rule.Paths {
-		b.WriteString("  - ")
+	b.WriteString("---\ninclusion: fileMatch\nfileMatchPattern: [")
+	for i, path := range rule.Paths {
+		if i > 0 {
+			b.WriteString(", ")
+		}
 		b.WriteString(strconv.Quote(path))
-		b.WriteString("\n")
 	}
-	b.WriteString("---\n\n")
+	b.WriteString("]\n---\n\n")
 	b.WriteString(generatedHeader)
 	b.WriteString(strings.TrimSpace(rule.Content))
 	b.WriteString("\n")
