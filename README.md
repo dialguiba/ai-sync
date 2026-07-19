@@ -137,6 +137,9 @@ You edit this:
     claude.md
     codex.md
     kiro.md
+  rules/
+    frontend.md
+    backend.md
   skills/
     example/
       SKILL.md
@@ -193,6 +196,27 @@ Use `.ai/targets/<target>.md` only for instructions that apply to one agent.
 | `.ai/targets/kiro.md` | Kiro-specific steering guidance |
 
 If the same rule appears in more than one target file, it probably belongs in `.ai/project.md` instead.
+
+### 🧭 Path-scoped rules
+
+Use `.ai/rules/<name>.md` for guidance that should apply only to specific files or directories. Each rule file must start with YAML frontmatter containing a `paths` list.
+
+Example `.ai/rules/frontend.md`:
+
+```md
+---
+paths:
+  - "frontend/**"
+  - "src/**/*.tsx"
+---
+
+# Frontend Rules
+
+- Use atomic design for UI components.
+- Keep container logic separate from presentational components.
+```
+
+`ai-sync` includes these rules in the generated agent guidance under **Path-Scoped Rules**. Agents that do not support native path matching still receive the scoped guidance as readable instructions.
 
 ### 🔌 MCP servers
 
@@ -290,13 +314,4 @@ go run ./cmd/ai-sync --dry-run
 
 Kiro Powers are generated as valid importable folders. `ai-sync` does not install or register them in the local Kiro app.
 
-Path-scoped rules are not implemented yet. The recommended future shape is:
-
-```txt
-.ai/rules/
-  frontend.md
-  backend.md
-  docs.md
-```
-
-Until that feature exists, keep shared guidance in `.ai/project.md` and target-specific guidance in `.ai/targets/`.
+Path-scoped rules are rendered into generated guidance, but `ai-sync` does not yet emit separate native rule files for agents that may support dedicated path-rule formats.

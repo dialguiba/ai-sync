@@ -167,6 +167,8 @@ Use .ai/ as the single source of truth for AI-agent configuration. Do not create
     claude.md
     codex.md
     kiro.md
+  rules/
+    <name>.md
   skills/
     <name>/
       SKILL.md
@@ -184,19 +186,21 @@ Use .ai/ as the single source of truth for AI-agent configuration. Do not create
 | .ai/targets/claude.md | Claude Code-specific guidance only. |
 | .ai/targets/codex.md | Codex-specific guidance only. |
 | .ai/targets/kiro.md | Kiro-specific guidance only. |
+| .ai/rules/<name>.md | Path-scoped rules with a YAML frontmatter paths list and Markdown guidance. |
 | .ai/skills/<name>/SKILL.md | Reusable workflow instructions copied into each agent's expected skill format. |
 
 ## Authoring rules
 
 - Put shared guidance in .ai/project.md.
 - Put agent-specific overrides in .ai/targets/<target>.md.
+- Put path-scoped guidance in .ai/rules/<name>.md with a paths list in YAML frontmatter.
 - Put reusable workflows in .ai/skills/<name>/SKILL.md.
 - Keep secrets out of .ai/mcp.yaml; use environment variables.
 - Do not create generated agent files directly. Run ai-sync after creating or editing .ai/.
 
 ## Suggested prompt for an AI agent
 
-Create the .ai/ directory using the ai-sync convention. Add shared project guidance to .ai/project.md, define MCP servers in .ai/mcp.yaml, put agent-specific instructions under .ai/targets/, and add reusable workflows under .ai/skills/<name>/SKILL.md. Do not create CLAUDE.md, AGENTS.md, .codex/config.toml, .mcp.json, or .kiro/settings/mcp.json directly.
+Create the .ai/ directory using the ai-sync convention. Add shared project guidance to .ai/project.md, define MCP servers in .ai/mcp.yaml, put agent-specific instructions under .ai/targets/, add path-scoped guidance under .ai/rules/<name>.md, and add reusable workflows under .ai/skills/<name>/SKILL.md. Do not create CLAUDE.md, AGENTS.md, .codex/config.toml, .mcp.json, or .kiro/settings/mcp.json directly.
 `
 }
 
@@ -208,6 +212,7 @@ type options struct {
 type source struct {
 	Project string
 	Targets map[string]string
+	Rules   []pathRule
 	MCP     mcpConfig
 	Skills  []skill
 }
@@ -220,6 +225,16 @@ type mcpServer struct {
 	Command string            `yaml:"command"`
 	Args    []string          `yaml:"args"`
 	Env     map[string]string `yaml:"env"`
+}
+
+type pathRule struct {
+	Name    string
+	Paths   []string
+	Content string
+}
+
+type ruleFrontmatter struct {
+	Paths []string `yaml:"paths"`
 }
 
 type skill struct {
@@ -239,6 +254,7 @@ func initSource(workdir string) (string, error) {
 		{Path: ".ai/targets/claude.md", Content: []byte("# Claude Code\n\nAdd Claude-specific guidance here.\n")},
 		{Path: ".ai/targets/codex.md", Content: []byte("# Codex\n\nAdd Codex-specific guidance here.\n")},
 		{Path: ".ai/targets/kiro.md", Content: []byte("# Kiro\n\nAdd Kiro-specific guidance here.\n")},
+		{Path: ".ai/rules/example.md", Content: []byte("---\npaths:\n  - \"src/**\"\n---\n\n# Example Path Rules\n\nAdd guidance that applies only to matching paths.\n")},
 		{Path: ".ai/skills/example/SKILL.md", Content: []byte("---\nname: \"example\"\ndescription: \"Explain when this reusable workflow should be used.\"\n---\n\n# Example Skill\n\nDocument the workflow here.\n")},
 	}
 	changes, err := applyOutputs(workdir, files, false)
@@ -287,12 +303,17 @@ func loadSource(workdir string) (source, error) {
 		targets[target] = text
 	}
 
+	rules, err := loadPathRules(filepath.Join(root, "rules"))
+	if err != nil {
+		return source{}, err
+	}
+
 	skills, err := loadSkills(filepath.Join(root, "skills"))
 	if err != nil {
 		return source{}, err
 	}
 
-	return source{Project: project, Targets: targets, MCP: mcp, Skills: skills}, nil
+	return source{Project: project, Targets: targets, Rules: rules, MCP: mcp, Skills: skills}, nil
 }
 
 func readRequiredText(path string) (string, error) {
@@ -316,6 +337,75 @@ func readOptionalText(path string) (string, error) {
 
 func normalizeMarkdown(text string) string {
 	return strings.TrimSpace(strings.ReplaceAll(text, "\r\n", "\n")) + "\n"
+}
+
+func loadPathRules(root string) ([]pathRule, error) {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read .ai/rules: %w", err)
+	}
+
+	var rules []pathRule
+	for _, entry := range entries {
+		if entry.IsDir() || strings.HasPrefix(entry.Name(), ".") || filepath.Ext(entry.Name()) != ".md" {
+			continue
+		}
+		path := filepath.Join(root, entry.Name())
+		contents, err := os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("read .ai/rules/%s: %w", entry.Name(), err)
+		}
+		rule, err := parsePathRule(strings.TrimSuffix(entry.Name(), ".md"), contents)
+		if err != nil {
+			return nil, fmt.Errorf("parse .ai/rules/%s: %w", entry.Name(), err)
+		}
+		rules = append(rules, rule)
+	}
+	sort.Slice(rules, func(i, j int) bool { return rules[i].Name < rules[j].Name })
+	return rules, nil
+}
+
+func parsePathRule(name string, contents []byte) (pathRule, error) {
+	text := strings.ReplaceAll(string(contents), "\r\n", "\n")
+	if !strings.HasPrefix(text, "---\n") {
+		return pathRule{}, errors.New("missing YAML frontmatter with paths")
+	}
+
+	frontmatter, body, ok := splitYAMLFrontmatter(text)
+	if !ok {
+		return pathRule{}, errors.New("missing closing frontmatter delimiter")
+	}
+
+	var meta ruleFrontmatter
+	if err := yaml.Unmarshal([]byte(frontmatter), &meta); err != nil {
+		return pathRule{}, err
+	}
+	if len(meta.Paths) == 0 {
+		return pathRule{}, errors.New("paths must contain at least one glob")
+	}
+	for _, path := range meta.Paths {
+		if strings.TrimSpace(path) == "" {
+			return pathRule{}, errors.New("paths cannot contain empty globs")
+		}
+	}
+
+	return pathRule{Name: name, Paths: meta.Paths, Content: normalizeMarkdown(body)}, nil
+}
+
+func splitYAMLFrontmatter(text string) (string, string, bool) {
+	lines := strings.SplitAfter(text[len("---\n"):], "\n")
+	var frontmatter strings.Builder
+	for i, line := range lines {
+		if strings.TrimSpace(line) == "---" {
+			body := strings.Join(lines[i+1:], "")
+			return frontmatter.String(), strings.TrimLeft(body, "\n"), true
+		}
+		frontmatter.WriteString(line)
+	}
+	return "", "", false
 }
 
 func loadSkills(root string) ([]skill, error) {
@@ -388,7 +478,7 @@ func renderTarget(target string, source source) ([]generatedFile, error) {
 
 func renderClaude(source source) ([]generatedFile, error) {
 	files := []generatedFile{
-		{Path: "CLAUDE.md", Content: renderGuidance("Claude Code", source.Project, source.Targets["claude"])},
+		{Path: "CLAUDE.md", Content: renderGuidance("Claude Code", source.Project, source.Targets["claude"], source.Rules)},
 		{Path: ".claude/settings.json", Content: mustJSON(map[string]any{"permissions": map[string]any{}})},
 		{Path: ".mcp.json", Content: mustJSON(map[string]any{"mcpServers": mcpServersJSON(source.MCP)})},
 	}
@@ -398,7 +488,7 @@ func renderClaude(source source) ([]generatedFile, error) {
 
 func renderCodex(source source) ([]generatedFile, error) {
 	files := []generatedFile{
-		{Path: "AGENTS.md", Content: renderGuidance("Codex", source.Project, source.Targets["codex"])},
+		{Path: "AGENTS.md", Content: renderGuidance("Codex", source.Project, source.Targets["codex"], source.Rules)},
 		{Path: ".codex/config.toml", Content: renderCodexConfig(source.MCP)},
 	}
 	files = append(files, copySkills(source.Skills, ".agents/skills", false)...)
@@ -407,7 +497,7 @@ func renderCodex(source source) ([]generatedFile, error) {
 
 func renderKiro(source source) ([]generatedFile, error) {
 	files := []generatedFile{
-		{Path: ".kiro/steering/project-conventions.md", Content: renderGuidance("Kiro", source.Project, source.Targets["kiro"])},
+		{Path: ".kiro/steering/project-conventions.md", Content: renderGuidance("Kiro", source.Project, source.Targets["kiro"], source.Rules)},
 		{Path: ".kiro/settings/mcp.json", Content: mustJSON(map[string]any{"mcpServers": mcpServersJSON(source.MCP)})},
 	}
 	for _, sourceSkill := range source.Skills {
@@ -422,7 +512,7 @@ func renderKiro(source source) ([]generatedFile, error) {
 	return files, nil
 }
 
-func renderGuidance(target, project, override string) []byte {
+func renderGuidance(target, project, override string, rules []pathRule) []byte {
 	var b strings.Builder
 	b.WriteString(generatedHeader)
 	b.WriteString("# ")
@@ -436,7 +526,28 @@ func renderGuidance(target, project, override string) []byte {
 		b.WriteString(strings.TrimSpace(override))
 		b.WriteString("\n")
 	}
+	if len(rules) > 0 {
+		b.WriteString("\n## Path-Scoped Rules\n")
+		for _, rule := range rules {
+			b.WriteString("\n### ")
+			b.WriteString(rule.Name)
+			b.WriteString("\n\n")
+			b.WriteString("Applies to: ")
+			b.WriteString(formatInlineCodeList(rule.Paths))
+			b.WriteString("\n\n")
+			b.WriteString(strings.TrimSpace(rule.Content))
+			b.WriteString("\n")
+		}
+	}
 	return []byte(b.String())
+}
+
+func formatInlineCodeList(values []string) string {
+	quoted := make([]string, 0, len(values))
+	for _, value := range values {
+		quoted = append(quoted, "`"+value+"`")
+	}
+	return strings.Join(quoted, ", ")
 }
 
 func renderCodexConfig(mcp mcpConfig) []byte {
