@@ -167,6 +167,8 @@ paths:
 	for _, want := range []string{
 		".claude/rules/.ai-sync-manifest\n",
 		".claude/rules/frontend.md\n",
+		".codex/scoped-agents-manifest\n",
+		"frontend/AGENTS.md\n",
 		".kiro/steering/.ai-sync-manifest\n",
 		".kiro/steering/frontend.md\n",
 	} {
@@ -360,7 +362,7 @@ Use atomic design for UI components.
 	assertFileNotContains(t, filepath.Join(dir, ".kiro/steering/project-conventions.md"), "## Path-Scoped Rules")
 }
 
-func TestSyncIncludesPathScopedRulesInGuidance(t *testing.T) {
+func TestCodexUsesNestedAgentsForPathScopedRules(t *testing.T) {
 	dir := t.TempDir()
 	writeCanonicalSource(t, dir)
 	writeFile(t, dir, ".ai/rules/frontend.md", `---
@@ -378,11 +380,19 @@ Use atomic design for UI components.
 		t.Fatalf("targeted sync failed: %v", err)
 	}
 
-	agentsPath := filepath.Join(dir, "AGENTS.md")
-	assertFileContains(t, agentsPath, "## Path-Scoped Rules")
-	assertFileContains(t, agentsPath, "### frontend")
-	assertFileContains(t, agentsPath, "Applies to: `frontend/**`, `src/**/*.tsx`")
-	assertFileContains(t, agentsPath, "Use atomic design for UI components.")
+	rootAgentsPath := filepath.Join(dir, "AGENTS.md")
+	assertFileContains(t, rootAgentsPath, "# Codex Agent Instructions")
+	assertFileNotContains(t, rootAgentsPath, "## Path-Scoped Rules")
+
+	for _, rel := range []string{"frontend/AGENTS.md", "src/AGENTS.md"} {
+		rulePath := filepath.Join(dir, rel)
+		assertFileContains(t, rulePath, "# Codex Path-Scoped Agent Instructions")
+		assertFileContains(t, rulePath, "### frontend")
+		assertFileContains(t, rulePath, "Applies to: `frontend/**`, `src/**/*.tsx`")
+		assertFileContains(t, rulePath, "Use atomic design for UI components.")
+	}
+	assertFileContains(t, filepath.Join(dir, ".codex/scoped-agents-manifest"), "frontend/AGENTS.md")
+	assertFileContains(t, filepath.Join(dir, ".codex/scoped-agents-manifest"), "src/AGENTS.md")
 }
 
 func TestSyncIsIdempotent(t *testing.T) {
@@ -468,11 +478,19 @@ paths:
 	if err != nil {
 		t.Fatalf("sync after rule removal failed: %v", err)
 	}
-	if !strings.Contains(out, "removed .claude/rules/frontend.md") || !strings.Contains(out, "removed .kiro/steering/frontend.md") {
-		t.Fatalf("expected stale generated rules to be pruned, got %q", out)
+	for _, want := range []string{
+		"removed .claude/rules/frontend.md",
+		"removed frontend/AGENTS.md",
+		"removed .kiro/steering/frontend.md",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("expected stale generated rules to include %q, got %q", want, out)
+		}
 	}
 	assertFileMissing(t, filepath.Join(dir, ".claude/rules/frontend.md"))
 	assertFileMissing(t, filepath.Join(dir, ".claude/rules/.ai-sync-manifest"))
+	assertFileMissing(t, filepath.Join(dir, "frontend/AGENTS.md"))
+	assertFileMissing(t, filepath.Join(dir, ".codex/scoped-agents-manifest"))
 	assertFileMissing(t, filepath.Join(dir, ".kiro/steering/frontend.md"))
 }
 

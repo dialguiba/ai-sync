@@ -148,12 +148,27 @@ You edit this:
 ai-sync generates this:
 
 Claude Code  -> CLAUDE.md, .claude/settings.json, .mcp.json, .claude/rules/, .claude/skills/
-Codex        -> AGENTS.md, .codex/config.toml, .agents/skills/
+Codex        -> AGENTS.md, nested */AGENTS.md for scoped rules, .codex/config.toml, .agents/skills/
 Kiro         -> .kiro/steering/, .kiro/settings/mcp.json, .kiro/powers/
 ```
 
 > [!IMPORTANT]
 > The rule is simple: **edit `.ai/`, not generated files**.
+
+## 🧾 Generation contract
+
+| Canonical input | Claude Code output | Codex output | Kiro output |
+| --- | --- | --- | --- |
+| `.ai/project.md` | `CLAUDE.md` shared section | root `AGENTS.md` shared section | `.kiro/steering/project-conventions.md` shared section |
+| `.ai/targets/claude.md` | `CLAUDE.md` target-specific section | — | — |
+| `.ai/targets/codex.md` | — | root `AGENTS.md` target-specific section | — |
+| `.ai/targets/kiro.md` | — | — | `.kiro/steering/project-conventions.md` target-specific section |
+| `.ai/rules/<name>.md` | `.claude/rules/<name>.md` with `paths` frontmatter | nested `<scope>/AGENTS.md` files, or root `AGENTS.md` when no narrower directory exists | `.kiro/steering/<name>.md` with `inclusion: fileMatch` |
+| `.ai/mcp.yaml` | `.mcp.json` | `.codex/config.toml` | `.kiro/settings/mcp.json` |
+| `.ai/skills/<name>/SKILL.md` | `.claude/skills/<name>/SKILL.md` | `.agents/skills/<name>/SKILL.md` | `.kiro/powers/<name>/POWER.md` |
+| extra files under `.ai/skills/<name>/` | copied under `.claude/skills/<name>/` | copied under `.agents/skills/<name>/` | copied under `.kiro/powers/<name>/` |
+
+`ai-sync list` prints this generated-file contract for the current repository without writing files. Use `ai-sync list --target codex` when you only want one target.
 
 ## 🛠️ Authoring `.ai/`
 
@@ -230,9 +245,9 @@ paths:
 | --- | --- |
 | Claude Code | `.claude/rules/<name>.md` with `paths` frontmatter |
 | Kiro | `.kiro/steering/<name>.md` with `inclusion: fileMatch` and `fileMatchPattern` |
-| Codex | Root `AGENTS.md` fallback under **Path-Scoped Rules** |
+| Codex | Root `AGENTS.md` for base guidance plus nested `<scope>/AGENTS.md` files for path-scoped rules |
 
-Codex currently receives a readable fallback because its documented instruction discovery is based on layered `AGENTS.md` files from the project root to the current directory, not arbitrary glob frontmatter.
+For Codex, `ai-sync` maps each glob to the nearest stable directory before the first glob segment. For example, `frontend/**` generates `frontend/AGENTS.md`, and `src/**/*.tsx` generates `src/AGENTS.md`. Root-only patterns such as `*.go` stay in the root `AGENTS.md` because Codex has no more specific directory to attach them to.
 
 ### 🔌 MCP servers
 
@@ -297,13 +312,13 @@ Supporting files inside the skill folder are copied too.
 
 ## 🧾 Generated ownership
 
-`ai-sync` writes generated headers and `.ai-sync-manifest` files for generated directories it manages, including skills, Claude rules, Kiro steering files, and Kiro Powers.
+`ai-sync` writes generated headers and manifest files for generated directories it manages, including skills, Claude rules, Codex scoped `AGENTS.md` files, Kiro steering files, and Kiro Powers.
 
 Those manifests let the CLI prune stale generated files without deleting user-owned files added manually inside generated folders.
 
 Practical rule:
 
-- ✅ Files listed in `.ai-sync-manifest` are owned by `ai-sync`
+- ✅ Files listed in `.ai-sync-manifest` or `.codex/scoped-agents-manifest` are owned by `ai-sync`
 - 🛡️ Files you add manually but that are not listed in the manifest are preserved
 - ⚠️ If `ai-sync` is about to overwrite an existing output file without an ai-sync generated marker, it prints a warning before writing it
 
@@ -332,4 +347,4 @@ go run ./cmd/ai-sync list
 
 Kiro Powers are generated as valid importable folders. `ai-sync` does not install or register them in the local Kiro app.
 
-Codex path-scoped rules currently render as guidance in root `AGENTS.md`. Future versions may generate nested `AGENTS.md` files for simple directory globs where the mapping is unambiguous.
+Codex scoped rules are directory-based, not full glob-based. When a glob has no stable directory prefix, the rule is kept in the root `AGENTS.md` as the safest available Codex scope.
