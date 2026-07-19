@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentle-ai/ai-sync/internal/app"
+	"github.com/dialguiba/ai-sync/internal/app"
 )
 
 func TestInitCreatesCanonicalSource(t *testing.T) {

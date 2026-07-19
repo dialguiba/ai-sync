@@ -1,4 +1,4 @@
-module github.com/gentle-ai/ai-sync
+module github.com/dialguiba/ai-sync
 
 go 1.23
 

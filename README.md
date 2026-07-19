@@ -1,18 +1,24 @@
-# ai-sync
+# 🔄 ai-sync
 
 <p align="center">
   <img src="logo.png" alt="ai-sync logo" width="250" />
+</p>
+
+<p align="center">
+  <img alt="Go" src="https://img.shields.io/badge/Go-1.23+-00ADD8?logo=go&logoColor=white" />
+  <img alt="CLI" src="https://img.shields.io/badge/type-CLI-blueviolet" />
+  <img alt="Status" src="https://img.shields.io/badge/status-active-success" />
 </p>
 
 `ai-sync` is a Go CLI that keeps AI-agent configuration in one canonical `.ai/` directory, then generates the files expected by Claude Code, Codex, and Kiro.
 
 Instead of maintaining three separate sets of rules, MCP settings, and skills by hand, you edit `.ai/` once and let `ai-sync` render each agent-specific format.
 
-## Why use it?
+## ✨ Why use it?
 
 Use `ai-sync` when a repository needs consistent instructions across multiple AI coding agents.
 
-| Problem | What `ai-sync` does |
+| 🚧 Problem | ✅ What `ai-sync` does |
 | --- | --- |
 | Claude, Codex, and Kiro each expect different files | Generates the right output files for each target |
 | Shared project rules drift between agents | Keeps shared guidance in `.ai/project.md` |
@@ -20,10 +26,10 @@ Use `ai-sync` when a repository needs consistent instructions across multiple AI
 | Skills need to be copied into several agent folders | Copies `.ai/skills/` into each target's expected location |
 | Generated files can become stale | Uses manifests to prune files it owns safely |
 
-## Install
+## 📦 Install
 
 ```sh
-go install github.com/gentle-ai/ai-sync/cmd/ai-sync@latest
+go install github.com/dialguiba/ai-sync/cmd/ai-sync@latest
 ```
 
 Make sure Go's bin directory is in your `PATH`:
@@ -38,7 +44,7 @@ Check that the CLI is available:
 ai-sync --help
 ```
 
-## Quick start
+## ⚡ Quick start
 
 Run these commands inside the repository you want to configure:
 
@@ -56,7 +62,7 @@ ai-sync --target codex
 ai-sync --target kiro
 ```
 
-## Mental model
+## 🧠 Mental model
 
 ```txt
 You edit this:
@@ -79,22 +85,23 @@ Codex        -> AGENTS.md, .codex/config.toml, .agents/skills/
 Kiro         -> .kiro/steering/project-conventions.md, .kiro/settings/mcp.json, .kiro/powers/
 ```
 
-The rule is simple: **edit `.ai/`, not generated files**.
+> [!IMPORTANT]
+> The rule is simple: **edit `.ai/`, not generated files**.
 
-## Authoring `.ai/`
+## 🛠️ Authoring `.ai/`
 
-### Shared project guidance
+### 🌍 Shared project guidance
 
 Put repo-wide instructions in `.ai/project.md`.
 
 Good examples:
 
-- stack and architecture conventions
-- build, test, lint, and verification commands
-- naming, formatting, and import rules
-- commit conventions
-- review expectations
-- generated-file ownership rules
+- 🏗️ stack and architecture conventions
+- 🧪 build, test, lint, and verification commands
+- 🧼 naming, formatting, and import rules
+- 📝 commit conventions
+- 👀 review expectations
+- 🧾 generated-file ownership rules
 
 Example:
 
@@ -112,11 +119,11 @@ Example:
 - Do not edit generated agent files directly; update `.ai/` instead.
 ```
 
-### Target-specific guidance
+### 🎯 Target-specific guidance
 
 Use `.ai/targets/<target>.md` only for instructions that apply to one agent.
 
-| File | Use for |
+| 📄 File | 🎯 Use for |
 | --- | --- |
 | `.ai/targets/claude.md` | Claude Code-specific behavior or wording |
 | `.ai/targets/codex.md` | Codex-specific workflow, planning, or review instructions |
@@ -124,7 +131,7 @@ Use `.ai/targets/<target>.md` only for instructions that apply to one agent.
 
 If the same rule appears in more than one target file, it probably belongs in `.ai/project.md` instead.
 
-### MCP servers
+### 🔌 MCP servers
 
 Define shared MCP servers in `.ai/mcp.yaml`:
 
@@ -141,13 +148,14 @@ servers:
 
 `ai-sync` maps that config to each agent's expected file:
 
-| Canonical source | Claude | Codex | Kiro |
+| 🧩 Canonical source | Claude | Codex | Kiro |
 | --- | --- | --- | --- |
 | `.ai/mcp.yaml` | `.mcp.json` | `.codex/config.toml` | `.kiro/settings/mcp.json` |
 
-Do not put secrets directly in `.ai/mcp.yaml`. Reference environment variables instead.
+> [!WARNING]
+> Do not put secrets directly in `.ai/mcp.yaml`. Reference environment variables instead.
 
-### Skills
+### 🧰 Skills
 
 Put reusable workflows in `.ai/skills/<name>/SKILL.md`:
 
@@ -176,7 +184,7 @@ description: "Use when browser automation or Playwright CLI validation is needed
 
 Generated mapping:
 
-| Source | Generated output |
+| 📥 Source | 📤 Generated output |
 | --- | --- |
 | `.ai/skills/<name>/SKILL.md` | `.claude/skills/<name>/SKILL.md` |
 | `.ai/skills/<name>/SKILL.md` | `.agents/skills/<name>/SKILL.md` |
@@ -184,7 +192,7 @@ Generated mapping:
 
 Supporting files inside the skill folder are copied too.
 
-## Generated ownership
+## 🧾 Generated ownership
 
 `ai-sync` writes generated headers and `.ai-sync-manifest` files for generated skill directories.
 
@@ -192,10 +200,10 @@ Those manifests let the CLI prune stale generated files without deleting user-ow
 
 Practical rule:
 
-- files listed in `.ai-sync-manifest` are owned by `ai-sync`
-- files you add manually but that are not listed in the manifest are preserved
+- ✅ Files listed in `.ai-sync-manifest` are owned by `ai-sync`
+- 🛡️ Files you add manually but that are not listed in the manifest are preserved
 
-## Local development
+## 👨‍💻 Local development
 
 Use this flow when working on `ai-sync` itself:
 
@@ -215,7 +223,7 @@ go run ./cmd/ai-sync --target codex
 go run ./cmd/ai-sync --dry-run
 ```
 
-## Current limitations
+## 🚧 Current limitations
 
 Kiro Powers are generated as valid importable folders. `ai-sync` does not install or register them in the local Kiro app.
 

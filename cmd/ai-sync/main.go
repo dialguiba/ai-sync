@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/gentle-ai/ai-sync/internal/app"
+	"github.com/dialguiba/ai-sync/internal/app"
 )
 
 func main() {
