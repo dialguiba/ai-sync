@@ -56,6 +56,7 @@ func RunWithBuildInfo(workdir string, args []string, build BuildInfo) (string, e
 	flags.SetOutput(&flagOutput)
 	flags.StringVar(&opts.target, "target", "", "target to generate: claude, codex, or kiro")
 	flags.BoolVar(&opts.dryRun, "dry-run", false, "show changes without writing")
+	flags.BoolVar(&opts.responseTrace, "response-trace", false, "include a short per-response context trace rule in generated guidance")
 	if err := flags.Parse(args); err != nil {
 		output := flagOutput.String()
 		if errors.Is(err, flag.ErrHelp) {
@@ -67,7 +68,7 @@ func RunWithBuildInfo(workdir string, args []string, build BuildInfo) (string, e
 		return "", fmt.Errorf("unknown command %q", flags.Arg(0))
 	}
 
-	outputs, err := renderOutputs(workdir, opts.target)
+	outputs, err := renderOutputs(workdir, opts.target, renderOptions{ResponseTrace: opts.responseTrace})
 	if err != nil {
 		return "", err
 	}
@@ -109,7 +110,7 @@ func listGeneratedFiles(workdir string, args []string) (string, error) {
 		return "", fmt.Errorf("unknown list argument %q", flags.Arg(0))
 	}
 
-	outputs, err := renderOutputs(workdir, opts.target)
+	outputs, err := renderOutputs(workdir, opts.target, renderOptions{})
 	if err != nil {
 		return "", err
 	}
@@ -143,7 +144,7 @@ func helpText() string {
 	return `ai-sync keeps AI-agent configuration in one canonical .ai/ directory.
 
 Usage:
-  ai-sync [--target claude|codex|kiro] [--dry-run]
+  ai-sync [--target claude|codex|kiro] [--dry-run] [--response-trace]
   ai-sync init
   ai-sync convention
   ai-sync list
@@ -158,6 +159,7 @@ Commands:
 Options:
   --target string   target to generate: claude, codex, or kiro
   --dry-run         show changes without writing
+  --response-trace  include a short per-response context trace rule in generated guidance
   --version, -v     print version and build metadata
   --help, -h        show help
 
@@ -169,6 +171,7 @@ Examples:
   ai-sync
   ai-sync --target codex
   ai-sync --dry-run
+  ai-sync --response-trace
 
 See README.md for the .ai authoring standard.
 `
@@ -235,8 +238,13 @@ Create the .ai/ directory using the ai-sync convention. Add shared project guida
 }
 
 type options struct {
-	target string
-	dryRun bool
+	target        string
+	dryRun        bool
+	responseTrace bool
+}
+
+type renderOptions struct {
+	ResponseTrace bool
 }
 
 type source struct {
@@ -493,7 +501,7 @@ func selectedTargets(target string) ([]string, error) {
 	return nil, fmt.Errorf("unknown target %q; expected claude, codex, or kiro", target)
 }
 
-func renderOutputs(workdir, target string) ([]generatedFile, error) {
+func renderOutputs(workdir, target string, opts renderOptions) ([]generatedFile, error) {
 	source, err := loadSource(workdir)
 	if err != nil {
 		return nil, err
@@ -506,7 +514,7 @@ func renderOutputs(workdir, target string) ([]generatedFile, error) {
 
 	var outputs []generatedFile
 	for _, target := range targets {
-		targetOutputs, err := renderTarget(target, source)
+		targetOutputs, err := renderTarget(target, source, opts)
 		if err != nil {
 			return nil, err
 		}
@@ -515,22 +523,22 @@ func renderOutputs(workdir, target string) ([]generatedFile, error) {
 	return appendGeneratedManifests(outputs), nil
 }
 
-func renderTarget(target string, source source) ([]generatedFile, error) {
+func renderTarget(target string, source source, opts renderOptions) ([]generatedFile, error) {
 	switch target {
 	case "claude":
-		return renderClaude(source)
+		return renderClaude(source, opts)
 	case "codex":
-		return renderCodex(source)
+		return renderCodex(source, opts)
 	case "kiro":
-		return renderKiro(source)
+		return renderKiro(source, opts)
 	default:
 		return nil, fmt.Errorf("unknown target %q", target)
 	}
 }
 
-func renderClaude(source source) ([]generatedFile, error) {
+func renderClaude(source source, opts renderOptions) ([]generatedFile, error) {
 	files := []generatedFile{
-		{Path: "CLAUDE.md", Content: renderGuidance("Claude Code", source.Project, source.Targets["claude"], nil)},
+		{Path: "CLAUDE.md", Content: renderGuidance("Claude Code", source.Project, source.Targets["claude"], nil, opts)},
 		{Path: ".claude/settings.json", Content: mustJSON(map[string]any{"permissions": map[string]any{}})},
 		{Path: ".mcp.json", Content: mustJSON(map[string]any{"mcpServers": mcpServersJSON(source.MCP)})},
 	}
@@ -556,10 +564,10 @@ func renderClaudeRule(rule pathRule) []byte {
 	return []byte(b.String())
 }
 
-func renderCodex(source source) ([]generatedFile, error) {
+func renderCodex(source source, opts renderOptions) ([]generatedFile, error) {
 	rootRules, scopedFiles := renderCodexScopedAgents(source.Rules)
 	files := []generatedFile{
-		{Path: "AGENTS.md", Content: renderGuidance("Codex", source.Project, source.Targets["codex"], rootRules)},
+		{Path: "AGENTS.md", Content: renderGuidance("Codex", source.Project, source.Targets["codex"], rootRules, opts)},
 		{Path: ".codex/config.toml", Content: renderCodexConfig(source.MCP)},
 	}
 	files = append(files, scopedFiles...)
@@ -652,9 +660,9 @@ func renderCodexScopedAgentsManifest(files []generatedFile) []byte {
 	return []byte("# Generated by ai-sync. Do not edit directly; source is .ai/.\n" + strings.Join(paths, "\n") + "\n")
 }
 
-func renderKiro(source source) ([]generatedFile, error) {
+func renderKiro(source source, opts renderOptions) ([]generatedFile, error) {
 	files := []generatedFile{
-		{Path: ".kiro/steering/project-conventions.md", Content: renderGuidance("Kiro", source.Project, source.Targets["kiro"], nil)},
+		{Path: ".kiro/steering/project-conventions.md", Content: renderGuidance("Kiro", source.Project, source.Targets["kiro"], nil, opts)},
 		{Path: ".kiro/settings/mcp.json", Content: mustJSON(map[string]any{"mcpServers": mcpServersJSON(source.MCP)})},
 	}
 	for _, rule := range source.Rules {
@@ -688,7 +696,7 @@ func renderKiroSteeringRule(rule pathRule) []byte {
 	return []byte(b.String())
 }
 
-func renderGuidance(target, project, override string, rules []pathRule) []byte {
+func renderGuidance(target, project, override string, rules []pathRule, opts renderOptions) []byte {
 	var b strings.Builder
 	b.WriteString(generatedHeader)
 	b.WriteString("# ")
@@ -701,6 +709,9 @@ func renderGuidance(target, project, override string, rules []pathRule) []byte {
 		b.WriteString("\n## Target-Specific Guidance\n\n")
 		b.WriteString(strings.TrimSpace(override))
 		b.WriteString("\n")
+	}
+	if opts.ResponseTrace {
+		b.WriteString(responseTraceGuidance())
 	}
 	if len(rules) > 0 {
 		b.WriteString("\n## Path-Scoped Rules\n")
@@ -716,6 +727,24 @@ func renderGuidance(target, project, override string, rules []pathRule) []byte {
 		}
 	}
 	return []byte(b.String())
+}
+
+func responseTraceGuidance() string {
+	return `
+## Response Trace
+
+Before answering, include a short Trace section when project files, rules, MCP config, or skills were read during the current response.
+
+Include only context loaded during the current response:
+- Rules read
+- Skills loaded
+- Files inspected
+- Tools used
+
+If no project files were read, say: "Trace: no project files read."
+
+Keep the Trace short and limited to context loaded during the current response. Do not include prior-turn context unless it was re-read. Summarize large file or tool lists.
+`
 }
 
 func formatInlineCodeList(values []string) string {
