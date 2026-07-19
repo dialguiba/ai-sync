@@ -9,6 +9,28 @@ import (
 	"github.com/dialguiba/ai-sync/internal/app"
 )
 
+func TestHelpShowsCommandsAndOptions(t *testing.T) {
+	dir := t.TempDir()
+
+	out, err := app.Run(dir, []string{"--help"})
+	if err != nil {
+		t.Fatalf("help should not return an error: %v", err)
+	}
+	for _, want := range []string{
+		"keeps AI-agent configuration",
+		"Usage:",
+		"ai-sync init",
+		"--target claude|codex|kiro",
+		"--dry-run",
+		"Examples:",
+		"See README.md",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("expected help to contain %q, got:\n%s", want, out)
+		}
+	}
+}
+
 func TestInitCreatesCanonicalSource(t *testing.T) {
 	dir := t.TempDir()
 

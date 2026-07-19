@@ -24,6 +24,9 @@ func Run(workdir string, args []string) (string, error) {
 	if len(args) > 0 && args[0] == "init" {
 		return initSource(workdir)
 	}
+	if wantsHelp(args) {
+		return helpText(), nil
+	}
 
 	var opts options
 	flags := flag.NewFlagSet("ai-sync", flag.ContinueOnError)
@@ -71,6 +74,40 @@ func Run(workdir string, args []string) (string, error) {
 		return "no changes\n", nil
 	}
 	return strings.Join(changes, "\n") + "\n", nil
+}
+
+func wantsHelp(args []string) bool {
+	for _, arg := range args {
+		if arg == "--help" || arg == "-h" {
+			return true
+		}
+	}
+	return false
+}
+
+func helpText() string {
+	return `ai-sync keeps AI-agent configuration in one canonical .ai/ directory.
+
+Usage:
+  ai-sync [--target claude|codex|kiro] [--dry-run]
+  ai-sync init
+
+Commands:
+  init              scaffold a starter .ai/ directory
+
+Options:
+  --target string   target to generate: claude, codex, or kiro
+  --dry-run         show changes without writing
+  --help, -h        show help
+
+Examples:
+  ai-sync init
+  ai-sync
+  ai-sync --target codex
+  ai-sync --dry-run
+
+See README.md for the .ai authoring standard.
+`
 }
 
 type options struct {
