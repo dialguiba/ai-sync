@@ -29,13 +29,36 @@ Use `ai-sync` when a repository needs consistent instructions across multiple AI
 ## 📦 Install
 
 ```sh
-go install github.com/dialguiba/ai-sync/cmd/ai-sync@latest
+go install github.com/dialguiba/ai-sync/cmd/ai-sync@main
 ```
 
-Make sure Go's bin directory is in your `PATH`:
+Make sure Go's bin directory is in your `PATH`.
+
+For the current terminal session:
 
 ```sh
 export PATH="$HOME/go/bin:$PATH"
+```
+
+To make it permanent, add the same line to your shell config file:
+
+| Shell | Config file | Command |
+| --- | --- | --- |
+| zsh | `~/.zshrc` | `echo 'export PATH="$HOME/go/bin:$PATH"' >> ~/.zshrc` |
+| bash | `~/.bashrc` | `echo 'export PATH="$HOME/go/bin:$PATH"' >> ~/.bashrc` |
+| fish | `~/.config/fish/config.fish` | `fish_add_path $HOME/go/bin` |
+
+Reload your shell config after updating it:
+
+```sh
+source ~/.zshrc   # zsh
+source ~/.bashrc  # bash
+```
+
+For fish, restart the terminal or run:
+
+```fish
+source ~/.config/fish/config.fish
 ```
 
 Check that the CLI is available:
@@ -43,6 +66,24 @@ Check that the CLI is available:
 ```sh
 ai-sync --help
 ```
+
+## 🔼 Update
+
+Update `ai-sync` by installing from `main` again:
+
+```sh
+go install github.com/dialguiba/ai-sync/cmd/ai-sync@main
+```
+
+Verify the installed binary:
+
+```sh
+which ai-sync
+ai-sync --help
+go version -m "$(which ai-sync)"
+```
+
+The module path should point to `github.com/dialguiba/ai-sync`. The version should reference the latest `main` commit.
 
 ## ⚡ Quick start
 
