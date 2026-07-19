@@ -147,9 +147,9 @@ You edit this:
 
 ai-sync generates this:
 
-Claude Code  -> CLAUDE.md, .claude/settings.json, .mcp.json, .claude/skills/
+Claude Code  -> CLAUDE.md, .claude/settings.json, .mcp.json, .claude/rules/, .claude/skills/
 Codex        -> AGENTS.md, .codex/config.toml, .agents/skills/
-Kiro         -> .kiro/steering/project-conventions.md, .kiro/settings/mcp.json, .kiro/powers/
+Kiro         -> .kiro/steering/, .kiro/settings/mcp.json, .kiro/powers/
 ```
 
 > [!IMPORTANT]
@@ -224,7 +224,15 @@ paths:
 - Keep container logic separate from presentational components.
 ```
 
-`ai-sync` includes these rules in the generated agent guidance under **Path-Scoped Rules**. Agents that do not support native path matching still receive the scoped guidance as readable instructions.
+`ai-sync` maps these rules to each target's strongest supported mechanism:
+
+| Target | Generated output |
+| --- | --- |
+| Claude Code | `.claude/rules/<name>.md` with `paths` frontmatter |
+| Kiro | `.kiro/steering/<name>.md` with `inclusion: fileMatch` and `fileMatchPattern` |
+| Codex | Root `AGENTS.md` fallback under **Path-Scoped Rules** |
+
+Codex currently receives a readable fallback because its documented instruction discovery is based on layered `AGENTS.md` files from the project root to the current directory, not arbitrary glob frontmatter.
 
 ### 🔌 MCP servers
 
@@ -289,7 +297,7 @@ Supporting files inside the skill folder are copied too.
 
 ## 🧾 Generated ownership
 
-`ai-sync` writes generated headers and `.ai-sync-manifest` files for generated skill directories.
+`ai-sync` writes generated headers and `.ai-sync-manifest` files for generated directories it manages, including skills, Claude rules, Kiro steering files, and Kiro Powers.
 
 Those manifests let the CLI prune stale generated files without deleting user-owned files added manually inside generated folders.
 
@@ -323,4 +331,4 @@ go run ./cmd/ai-sync list
 
 Kiro Powers are generated as valid importable folders. `ai-sync` does not install or register them in the local Kiro app.
 
-Path-scoped rules are rendered into generated guidance, but `ai-sync` does not yet emit separate native rule files for agents that may support dedicated path-rule formats.
+Codex path-scoped rules currently render as guidance in root `AGENTS.md`. Future versions may generate nested `AGENTS.md` files for simple directory globs where the mapping is unambiguous.

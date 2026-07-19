@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -76,15 +77,15 @@ func RunWithBuildInfo(workdir string, args []string, build BuildInfo) (string, e
 		return "", err
 	}
 
-	changes, err := applyOutputs(workdir, outputs, opts.dryRun)
+	changes, err := pruneTargetOutputs(workdir, targets, outputs, opts.dryRun)
 	if err != nil {
 		return "", err
 	}
-	pruned, err := pruneTargetOutputs(workdir, targets, outputs, opts.dryRun)
+	written, err := applyOutputs(workdir, outputs, opts.dryRun)
 	if err != nil {
 		return "", err
 	}
-	changes = append(changes, pruned...)
+	changes = append(changes, written...)
 	if len(changes) == 0 {
 		return "no changes\n", nil
 	}
@@ -222,7 +223,7 @@ Use .ai/ as the single source of truth for AI-agent configuration. Do not create
 
 - Put shared guidance in .ai/project.md.
 - Put agent-specific overrides in .ai/targets/<target>.md.
-- Put path-scoped guidance in .ai/rules/<name>.md with a paths list in YAML frontmatter.
+- Put path-scoped guidance in .ai/rules/<name>.md with a paths list in YAML frontmatter. ai-sync maps these rules to native Claude Code .claude/rules files, native Kiro fileMatch steering files, and Codex AGENTS.md fallback guidance.
 - Put reusable workflows in .ai/skills/<name>/SKILL.md.
 - Keep secrets out of .ai/mcp.yaml; use environment variables.
 - Do not create generated agent files directly. Run ai-sync after creating or editing .ai/.
@@ -529,12 +530,30 @@ func renderTarget(target string, source source) ([]generatedFile, error) {
 
 func renderClaude(source source) ([]generatedFile, error) {
 	files := []generatedFile{
-		{Path: "CLAUDE.md", Content: renderGuidance("Claude Code", source.Project, source.Targets["claude"], source.Rules)},
+		{Path: "CLAUDE.md", Content: renderGuidance("Claude Code", source.Project, source.Targets["claude"], nil)},
 		{Path: ".claude/settings.json", Content: mustJSON(map[string]any{"permissions": map[string]any{}})},
 		{Path: ".mcp.json", Content: mustJSON(map[string]any{"mcpServers": mcpServersJSON(source.MCP)})},
 	}
+	for _, rule := range source.Rules {
+		files = append(files, generatedFile{Path: filepath.ToSlash(filepath.Join(".claude/rules", rule.Name+".md")), Content: renderClaudeRule(rule)})
+	}
 	files = append(files, copySkills(source.Skills, ".claude/skills", false)...)
 	return files, nil
+}
+
+func renderClaudeRule(rule pathRule) []byte {
+	var b strings.Builder
+	b.WriteString("---\npaths:\n")
+	for _, path := range rule.Paths {
+		b.WriteString("  - ")
+		b.WriteString(strconv.Quote(path))
+		b.WriteString("\n")
+	}
+	b.WriteString("---\n\n")
+	b.WriteString(generatedHeader)
+	b.WriteString(strings.TrimSpace(rule.Content))
+	b.WriteString("\n")
+	return []byte(b.String())
 }
 
 func renderCodex(source source) ([]generatedFile, error) {
@@ -548,8 +567,11 @@ func renderCodex(source source) ([]generatedFile, error) {
 
 func renderKiro(source source) ([]generatedFile, error) {
 	files := []generatedFile{
-		{Path: ".kiro/steering/project-conventions.md", Content: renderGuidance("Kiro", source.Project, source.Targets["kiro"], source.Rules)},
+		{Path: ".kiro/steering/project-conventions.md", Content: renderGuidance("Kiro", source.Project, source.Targets["kiro"], nil)},
 		{Path: ".kiro/settings/mcp.json", Content: mustJSON(map[string]any{"mcpServers": mcpServersJSON(source.MCP)})},
+	}
+	for _, rule := range source.Rules {
+		files = append(files, generatedFile{Path: filepath.ToSlash(filepath.Join(".kiro/steering", rule.Name+".md")), Content: renderKiroSteeringRule(rule)})
 	}
 	for _, sourceSkill := range source.Skills {
 		files = append(files, generatedFile{Path: filepath.ToSlash(filepath.Join(".kiro/powers", sourceSkill.Name, "POWER.md")), Content: renderKiroPower(sourceSkill)})
@@ -561,6 +583,21 @@ func renderKiro(source source) ([]generatedFile, error) {
 		}
 	}
 	return files, nil
+}
+
+func renderKiroSteeringRule(rule pathRule) []byte {
+	var b strings.Builder
+	b.WriteString("---\ninclusion: fileMatch\nfileMatchPattern:\n")
+	for _, path := range rule.Paths {
+		b.WriteString("  - ")
+		b.WriteString(strconv.Quote(path))
+		b.WriteString("\n")
+	}
+	b.WriteString("---\n\n")
+	b.WriteString(generatedHeader)
+	b.WriteString(strings.TrimSpace(rule.Content))
+	b.WriteString("\n")
+	return []byte(b.String())
 }
 
 func renderGuidance(target, project, override string, rules []pathRule) []byte {
@@ -675,7 +712,7 @@ func copySkills(skills []skill, base string, renameSkillFile bool) []generatedFi
 func appendGeneratedManifests(outputs []generatedFile) []generatedFile {
 	byDir := map[string][]string{}
 	for _, output := range outputs {
-		dir := skillOutputDir(output.Path)
+		dir := manifestOutputDir(output.Path)
 		if dir == "" {
 			continue
 		}
@@ -694,8 +731,13 @@ func appendGeneratedManifests(outputs []generatedFile) []generatedFile {
 	return outputs
 }
 
-func skillOutputDir(path string) string {
+func manifestOutputDir(path string) string {
 	path = filepath.ToSlash(path)
+	for _, dir := range []string{".claude/rules", ".kiro/steering"} {
+		if strings.HasPrefix(path, dir+"/") {
+			return dir
+		}
+	}
 	for _, root := range []string{".claude/skills", ".agents/skills", ".kiro/powers"} {
 		prefix := root + "/"
 		if strings.HasPrefix(path, prefix) {
@@ -716,14 +758,17 @@ func pruneTargetOutputs(workdir string, targets []string, outputs []generatedFil
 	}
 
 	var roots []string
+	var manifestDirs []string
 	for _, target := range targets {
 		switch target {
 		case "claude":
 			roots = append(roots, ".claude/skills")
+			manifestDirs = append(manifestDirs, ".claude/rules")
 		case "codex":
 			roots = append(roots, ".agents/skills")
 		case "kiro":
 			roots = append(roots, ".kiro/powers")
+			manifestDirs = append(manifestDirs, ".kiro/steering")
 		}
 	}
 
@@ -753,7 +798,72 @@ func pruneTargetOutputs(workdir string, targets []string, outputs []generatedFil
 			changes = append(changes, removed...)
 		}
 	}
+	for _, dir := range manifestDirs {
+		removed, err := pruneGeneratedFilesInDir(workdir, dir, keep, dryRun)
+		if err != nil {
+			return nil, err
+		}
+		changes = append(changes, removed...)
+	}
 	sort.Strings(changes)
+	return changes, nil
+}
+
+func pruneGeneratedFilesInDir(workdir, relDir string, keep map[string]struct{}, dryRun bool) ([]string, error) {
+	dirPath := filepath.Join(workdir, filepath.FromSlash(relDir))
+	manifestPath := filepath.Join(dirPath, ".ai-sync-manifest")
+	manifest, err := os.ReadFile(manifestPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read %s/.ai-sync-manifest: %w", relDir, err)
+	}
+	if !bytes.HasPrefix(manifest, []byte("# Generated by ai-sync.")) {
+		return nil, nil
+	}
+
+	var changes []string
+	for _, generatedRel := range strings.Split(string(manifest), "\n") {
+		generatedRel = strings.TrimSpace(generatedRel)
+		if generatedRel == "" || strings.HasPrefix(generatedRel, "#") {
+			continue
+		}
+		if !safeRelativePath(generatedRel) {
+			continue
+		}
+		relPath := filepath.ToSlash(filepath.Join(relDir, generatedRel))
+		if _, ok := keep[relPath]; ok {
+			continue
+		}
+		fullPath := filepath.Join(dirPath, filepath.FromSlash(generatedRel))
+		if _, err := os.Stat(fullPath); err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, fmt.Errorf("stat %s: %w", relPath, err)
+		}
+		verb := "removed"
+		if dryRun {
+			verb = "would remove"
+		} else if err := os.Remove(fullPath); err != nil {
+			return nil, fmt.Errorf("remove %s: %w", relPath, err)
+		}
+		changes = append(changes, verb+" "+relPath)
+	}
+	if !outputTreeExists(keep, relDir) {
+		manifestRel := filepath.ToSlash(filepath.Join(relDir, ".ai-sync-manifest"))
+		verb := "removed"
+		if dryRun {
+			verb = "would remove"
+		} else if err := os.Remove(manifestPath); err != nil && !os.IsNotExist(err) {
+			return nil, fmt.Errorf("remove %s: %w", manifestRel, err)
+		}
+		changes = append(changes, verb+" "+manifestRel)
+		if !dryRun {
+			removeEmptyParents(dirPath)
+		}
+	}
 	return changes, nil
 }
 
