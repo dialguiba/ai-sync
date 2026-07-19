@@ -67,6 +67,12 @@ Check that the CLI is available:
 ai-sync --help
 ```
 
+Print the `.ai/` authoring convention when you want a human or AI agent to scaffold the canonical source files for an existing project:
+
+```sh
+ai-sync convention
+```
+
 ## 🔼 Update
 
 Update `ai-sync` by running the install command again:
@@ -90,9 +96,10 @@ The module path should point to `github.com/dialguiba/ai-sync`, and the version 
 Run these commands inside the repository you want to configure:
 
 ```sh
-ai-sync init       # create a starter .ai/ directory
-ai-sync            # generate Claude, Codex, and Kiro files
-ai-sync --dry-run  # preview changes without writing files
+ai-sync init        # create a starter .ai/ directory
+ai-sync convention  # print the .ai authoring convention for an AI agent
+ai-sync             # generate Claude, Codex, and Kiro files
+ai-sync --dry-run   # preview changes without writing files
 ```
 
 Generate only one target when needed:

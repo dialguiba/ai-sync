@@ -20,6 +20,8 @@ func TestHelpShowsCommandsAndOptions(t *testing.T) {
 		"keeps AI-agent configuration",
 		"Usage:",
 		"ai-sync init",
+		"ai-sync convention",
+		"convention        print the .ai authoring convention",
 		"--target claude|codex|kiro",
 		"--dry-run",
 		"Examples:",
@@ -27,6 +29,30 @@ func TestHelpShowsCommandsAndOptions(t *testing.T) {
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("expected help to contain %q, got:\n%s", want, out)
+		}
+	}
+}
+
+func TestConventionShowsCanonicalAuthoringGuide(t *testing.T) {
+	dir := t.TempDir()
+
+	out, err := app.Run(dir, []string{"convention"})
+	if err != nil {
+		t.Fatalf("convention should not return an error: %v", err)
+	}
+	for _, want := range []string{
+		"# ai-sync .ai Authoring Convention",
+		"Create a canonical .ai/ directory",
+		".ai/project.md",
+		".ai/mcp.yaml",
+		".ai/targets/claude.md",
+		".ai/targets/codex.md",
+		".ai/targets/kiro.md",
+		".ai/skills/<name>/SKILL.md",
+		"Do not create generated agent files directly",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("expected convention output to contain %q, got:\n%s", want, out)
 		}
 	}
 }

@@ -24,6 +24,9 @@ func Run(workdir string, args []string) (string, error) {
 	if len(args) > 0 && args[0] == "init" {
 		return initSource(workdir)
 	}
+	if len(args) > 0 && args[0] == "convention" {
+		return conventionText(), nil
+	}
 	if wantsHelp(args) {
 		return helpText(), nil
 	}
@@ -91,9 +94,11 @@ func helpText() string {
 Usage:
   ai-sync [--target claude|codex|kiro] [--dry-run]
   ai-sync init
+  ai-sync convention
 
 Commands:
   init              scaffold a starter .ai/ directory
+  convention        print the .ai authoring convention for humans or AI agents
 
 Options:
   --target string   target to generate: claude, codex, or kiro
@@ -102,11 +107,64 @@ Options:
 
 Examples:
   ai-sync init
+  ai-sync convention
   ai-sync
   ai-sync --target codex
   ai-sync --dry-run
 
 See README.md for the .ai authoring standard.
+`
+}
+
+func conventionText() string {
+	return `# ai-sync .ai Authoring Convention
+
+Create a canonical .ai/ directory for the project. ai-sync reads this directory and generates the agent-specific files for Claude Code, Codex, and Kiro.
+
+## Goal
+
+Use .ai/ as the single source of truth for AI-agent configuration. Do not create generated agent files directly, such as CLAUDE.md, AGENTS.md, .mcp.json, .codex/config.toml, or .kiro/settings/mcp.json.
+
+## Required structure
+
+` + "```txt" + `
+.ai/
+  project.md
+  mcp.yaml
+  targets/
+    claude.md
+    codex.md
+    kiro.md
+  skills/
+    <name>/
+      SKILL.md
+      scripts/
+      references/
+      assets/
+` + "```" + `
+
+## Files
+
+| File | Purpose |
+| --- | --- |
+| .ai/project.md | Shared project rules, architecture, commands, conventions, and review expectations. |
+| .ai/mcp.yaml | Shared MCP server definitions. Reference environment variables instead of hardcoding secrets. |
+| .ai/targets/claude.md | Claude Code-specific guidance only. |
+| .ai/targets/codex.md | Codex-specific guidance only. |
+| .ai/targets/kiro.md | Kiro-specific guidance only. |
+| .ai/skills/<name>/SKILL.md | Reusable workflow instructions copied into each agent's expected skill format. |
+
+## Authoring rules
+
+- Put shared guidance in .ai/project.md.
+- Put agent-specific overrides in .ai/targets/<target>.md.
+- Put reusable workflows in .ai/skills/<name>/SKILL.md.
+- Keep secrets out of .ai/mcp.yaml; use environment variables.
+- Do not create generated agent files directly. Run ai-sync after creating or editing .ai/.
+
+## Suggested prompt for an AI agent
+
+Create the .ai/ directory using the ai-sync convention. Add shared project guidance to .ai/project.md, define MCP servers in .ai/mcp.yaml, put agent-specific instructions under .ai/targets/, and add reusable workflows under .ai/skills/<name>/SKILL.md. Do not create CLAUDE.md, AGENTS.md, .codex/config.toml, .mcp.json, or .kiro/settings/mcp.json directly.
 `
 }
 
