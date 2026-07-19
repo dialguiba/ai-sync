@@ -1,8 +1,45 @@
 # ai-sync
 
+<p align="center">
+  <img src="logo.png" alt="ai-sync logo" width="160" />
+</p>
+
 `ai-sync` is a Go CLI that reads a canonical `.ai/` directory in a repository and generates agent-specific configuration for Claude Code, Codex, and Kiro.
 
+## Installation
+
+### Install with Go
+
+```sh
+go install github.com/dialguiba/ai-sync/cmd/ai-sync@latest
+```
+
+Make sure Go's bin directory is in your `PATH`:
+
+```sh
+export PATH="$HOME/go/bin:$PATH"
+```
+
+Verify the binary is available:
+
+```sh
+ai-sync --help
+```
+
+### Local development
+
+Use this flow when you want to work on the `ai-sync` source code:
+
+```sh
+git clone git@github.com-home:dialguiba/ai-sync.git
+cd ai-sync
+go test ./...
+go run ./cmd/ai-sync --help
+```
+
 ## Quick start
+
+Run these commands inside any repository where you want to generate agent configuration:
 
 ```sh
 ai-sync init            # scaffold a starter .ai/ directory
@@ -11,7 +48,7 @@ ai-sync --target codex  # generate one target: claude, codex, or kiro
 ai-sync --dry-run       # show what would be written
 ```
 
-During development, run it from source:
+During local development, use `go run` instead of the installed binary:
 
 ```sh
 go run ./cmd/ai-sync init
