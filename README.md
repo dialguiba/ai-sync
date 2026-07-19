@@ -305,6 +305,7 @@ Practical rule:
 
 - ✅ Files listed in `.ai-sync-manifest` are owned by `ai-sync`
 - 🛡️ Files you add manually but that are not listed in the manifest are preserved
+- ⚠️ If `ai-sync` is about to overwrite an existing output file without an ai-sync generated marker, it prints a warning before writing it
 
 ## 👨‍💻 Local development
 

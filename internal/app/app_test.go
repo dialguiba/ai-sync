@@ -203,6 +203,82 @@ func TestListSupportsTargetFlag(t *testing.T) {
 	}
 }
 
+func TestSyncWarnsBeforeOverwritingUnmarkedExistingOutput(t *testing.T) {
+	dir := t.TempDir()
+	writeCanonicalSource(t, dir)
+	writeFile(t, dir, "AGENTS.md", "# Manual Codex Instructions\n")
+
+	out, err := app.Run(dir, []string{"--target", "codex"})
+	if err != nil {
+		t.Fatalf("sync should not return an error: %v", err)
+	}
+	if !strings.Contains(out, "warning: overwriting existing unmarked file AGENTS.md") {
+		t.Fatalf("expected overwrite warning, got:\n%s", out)
+	}
+	if !strings.Contains(out, "wrote AGENTS.md") {
+		t.Fatalf("expected sync to continue writing AGENTS.md, got:\n%s", out)
+	}
+}
+
+func TestSyncDoesNotWarnWhenOverwritingMarkedGeneratedOutput(t *testing.T) {
+	dir := t.TempDir()
+	writeCanonicalSource(t, dir)
+
+	if _, err := app.Run(dir, []string{"--target", "codex"}); err != nil {
+		t.Fatalf("initial sync failed: %v", err)
+	}
+	writeFile(t, dir, ".ai/project.md", "# Project Rules\n\nUpdated guidance.\n")
+
+	out, err := app.Run(dir, []string{"--target", "codex"})
+	if err != nil {
+		t.Fatalf("sync should not return an error: %v", err)
+	}
+	if strings.Contains(out, "warning: overwriting existing unmarked file AGENTS.md") {
+		t.Fatalf("expected no warning for marked generated AGENTS.md, got:\n%s", out)
+	}
+	if !strings.Contains(out, "wrote AGENTS.md") {
+		t.Fatalf("expected AGENTS.md to be updated, got:\n%s", out)
+	}
+}
+
+func TestSyncDoesNotWarnWhenOverwritingMarkedFrontmatterRuleOutput(t *testing.T) {
+	dir := t.TempDir()
+	writeCanonicalSource(t, dir)
+	writeFile(t, dir, ".ai/rules/frontend.md", `---
+paths:
+  - "frontend/**"
+---
+
+# Frontend Rules
+
+Use atomic design.
+`)
+
+	if _, err := app.Run(dir, []string{"--target", "claude"}); err != nil {
+		t.Fatalf("initial sync failed: %v", err)
+	}
+	writeFile(t, dir, ".ai/rules/frontend.md", `---
+paths:
+  - "frontend/**"
+---
+
+# Frontend Rules
+
+Use atomic design and container components.
+`)
+
+	out, err := app.Run(dir, []string{"--target", "claude"})
+	if err != nil {
+		t.Fatalf("sync should not return an error: %v", err)
+	}
+	if strings.Contains(out, "warning: overwriting existing unmarked file .claude/rules/frontend.md") {
+		t.Fatalf("expected no warning for marked frontmatter rule, got:\n%s", out)
+	}
+	if !strings.Contains(out, "wrote .claude/rules/frontend.md") {
+		t.Fatalf("expected Claude rule to be updated, got:\n%s", out)
+	}
+}
+
 func TestSyncGeneratesClaudeCodexAndKiroOutputs(t *testing.T) {
 	dir := t.TempDir()
 	writeCanonicalSource(t, dir)
