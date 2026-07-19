@@ -86,10 +86,11 @@ Verify the installed binary:
 ```sh
 which ai-sync
 ai-sync --help
+ai-sync version
 go version -m "$(which ai-sync)"
 ```
 
-The module path should point to `github.com/dialguiba/ai-sync`, and the version should match the latest release tag.
+The module path should point to `github.com/dialguiba/ai-sync`, and `ai-sync version` should match the latest release tag.
 
 Prebuilt binaries are also attached to each GitHub Release for macOS, Linux, and Windows on `amd64` and `arm64`.
 
@@ -111,6 +112,7 @@ Run these commands inside the repository you want to configure:
 ```sh
 ai-sync init        # create a starter .ai/ directory
 ai-sync convention  # print the .ai authoring convention for an AI agent
+ai-sync version     # print version and build metadata
 ai-sync             # generate Claude, Codex, and Kiro files
 ai-sync --dry-run   # preview changes without writing files
 ```

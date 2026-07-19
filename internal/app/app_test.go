@@ -21,7 +21,9 @@ func TestHelpShowsCommandsAndOptions(t *testing.T) {
 		"Usage:",
 		"ai-sync init",
 		"ai-sync convention",
+		"ai-sync version",
 		"convention        print the .ai authoring convention",
+		"version           print version and build metadata",
 		"--target claude|codex|kiro",
 		"--dry-run",
 		"Examples:",
@@ -29,6 +31,23 @@ func TestHelpShowsCommandsAndOptions(t *testing.T) {
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("expected help to contain %q, got:\n%s", want, out)
+		}
+	}
+}
+
+func TestVersionShowsBuildMetadata(t *testing.T) {
+	dir := t.TempDir()
+
+	info := app.BuildInfo{Version: "v1.2.3", Commit: "abc123", Date: "2026-07-19T00:00:00Z"}
+	for _, args := range [][]string{{"version"}, {"--version"}} {
+		out, err := app.RunWithBuildInfo(dir, args, info)
+		if err != nil {
+			t.Fatalf("version should not return an error for args %v: %v", args, err)
+		}
+		for _, want := range []string{"ai-sync v1.2.3", "commit abc123", "built 2026-07-19T00:00:00Z"} {
+			if !strings.Contains(out, want) {
+				t.Fatalf("expected version output for args %v to contain %q, got:\n%s", args, want, out)
+			}
 		}
 	}
 }

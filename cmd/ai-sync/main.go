@@ -7,8 +7,18 @@ import (
 	"github.com/dialguiba/ai-sync/internal/app"
 )
 
+var (
+	version = "dev"
+	commit  = "unknown"
+	date    = "unknown"
+)
+
 func main() {
-	out, err := app.Run(".", os.Args[1:])
+	out, err := app.RunWithBuildInfo(".", os.Args[1:], app.BuildInfo{
+		Version: version,
+		Commit:  commit,
+		Date:    date,
+	})
 	if out != "" {
 		fmt.Print(out)
 	}
