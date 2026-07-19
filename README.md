@@ -1,7 +1,7 @@
 # ai-sync
 
 <p align="center">
-  <img src="logo.png" alt="ai-sync logo" width="200" />
+  <img src="logo.png" alt="ai-sync logo" width="250" />
 </p>
 
 `ai-sync` is a Go CLI that reads a canonical `.ai/` directory in a repository and generates agent-specific configuration for Claude Code, Codex, and Kiro.
