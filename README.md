@@ -115,7 +115,6 @@ ai-sync convention  # print the .ai authoring convention for an AI agent
 ai-sync version     # print version and build metadata
 ai-sync             # generate Claude, Codex, and Kiro files
 ai-sync --dry-run   # preview changes without writing files
-ai-sync --response-trace # add an optional per-response context trace rule
 ai-sync list        # list generated file paths without writing files
 ```
 
@@ -126,16 +125,6 @@ ai-sync --target claude
 ai-sync --target codex
 ai-sync --target kiro
 ```
-
-Enable the optional response trace rule when you want agents to show what context they loaded for each answer:
-
-```sh
-ai-sync --response-trace
-ai-sync --target codex --response-trace
-ai-sync --dry-run --response-trace
-```
-
-By default this rule is off. When enabled, generated base guidance tells agents to include a short `Trace` section listing only context loaded during the current response, such as rules read, skills loaded, files inspected, and tools used. The generated instruction explicitly covers agent files like `AGENTS.md`, nested `*/AGENTS.md`, `CLAUDE.md`, `.claude/rules/*.md`, `.kiro/steering/*.md`, `.ai/rules/*.md`, `.ai/mcp.yaml`, and `SKILL.md` files. Running `ai-sync` again without `--response-trace` removes the generated trace rule.
 
 ## 🧠 Mental model
 
@@ -230,22 +219,6 @@ List generated file paths without writing files:
 ai-sync list
 ai-sync list --target codex
 ```
-
-### 🔎 Optional response trace
-
-Use `--response-trace` when you want generated base guidance to ask agents for a compact context receipt before each answer:
-
-```sh
-ai-sync --response-trace
-```
-
-The trace is intentionally small and per-response only. It should mention what was loaded during the current answer, not the whole conversation history. The generated instruction explicitly covers agent instruction files and rule files, including `AGENTS.md`, nested `*/AGENTS.md`, `.kiro/steering/*.md`, and `SKILL.md` files. If no project files were read, the generated instruction tells the agent to say:
-
-```txt
-Trace: no project files read.
-```
-
-This feature is disabled by default so teams can choose whether the extra visibility is worth the small token cost.
 
 ### 🧭 Path-scoped rules
 
