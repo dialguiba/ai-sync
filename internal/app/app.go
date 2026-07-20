@@ -551,6 +551,7 @@ func renderClaudeRule(rule pathRule) []byte {
 	}
 	b.WriteString("---\n\n")
 	b.WriteString(generatedHeader)
+	b.WriteString(renderPathScopeNotice(rule.Paths))
 	b.WriteString(strings.TrimSpace(rule.Content))
 	b.WriteString("\n")
 	return []byte(b.String())
@@ -630,6 +631,8 @@ func renderCodexScopedGuidance(rules []pathRule) []byte {
 	var b strings.Builder
 	b.WriteString(generatedHeader)
 	b.WriteString("# Codex Path-Scoped Agent Instructions\n")
+	b.WriteString("\n## Scope\n\n")
+	b.WriteString("This AGENTS.md applies only to files in this directory tree. Apply each rule below only to files matching its listed globs.\n")
 	for _, rule := range rules {
 		b.WriteString("\n### ")
 		b.WriteString(rule.Name)
@@ -683,6 +686,7 @@ func renderKiroSteeringRule(rule pathRule) []byte {
 	}
 	b.WriteString("]\n---\n\n")
 	b.WriteString(generatedHeader)
+	b.WriteString(renderPathScopeNotice(rule.Paths))
 	b.WriteString(strings.TrimSpace(rule.Content))
 	b.WriteString("\n")
 	return []byte(b.String())
@@ -704,6 +708,8 @@ func renderGuidance(target, project, override string, rules []pathRule) []byte {
 	}
 	if len(rules) > 0 {
 		b.WriteString("\n## Path-Scoped Rules\n")
+		b.WriteString("\n## Scope\n\n")
+		b.WriteString("The rules below are path-scoped. Apply each rule only to files matching its listed globs.\n")
 		for _, rule := range rules {
 			b.WriteString("\n### ")
 			b.WriteString(rule.Name)
@@ -716,6 +722,10 @@ func renderGuidance(target, project, override string, rules []pathRule) []byte {
 		}
 	}
 	return []byte(b.String())
+}
+
+func renderPathScopeNotice(paths []string) string {
+	return "## Scope\n\nThese rules are path-scoped. Apply the instructions below only to files matching: " + formatInlineCodeList(paths) + ".\n\n"
 }
 
 func formatInlineCodeList(values []string) string {

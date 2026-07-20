@@ -334,6 +334,11 @@ Use atomic design for UI components.
 
 	rulePath := filepath.Join(dir, ".claude/rules/frontend.md")
 	assertFileContains(t, rulePath, "---\npaths:\n  - \"frontend/**\"\n  - \"src/**/*.tsx\"\n---")
+	assertFileContainsInOrder(t, rulePath, []string{
+		"## Scope",
+		"These rules are path-scoped. Apply the instructions below only to files matching: `frontend/**`, `src/**/*.tsx`.",
+		"Use atomic design for UI components.",
+	})
 	assertFileContains(t, rulePath, "Use atomic design for UI components.")
 	assertFileNotContains(t, filepath.Join(dir, "CLAUDE.md"), "## Path-Scoped Rules")
 }
@@ -358,6 +363,11 @@ Use atomic design for UI components.
 
 	rulePath := filepath.Join(dir, ".kiro/steering/frontend.md")
 	assertFileContains(t, rulePath, "---\ninclusion: fileMatch\nfileMatchPattern: [\"frontend/**\", \"src/**/*.tsx\"]\n---")
+	assertFileContainsInOrder(t, rulePath, []string{
+		"## Scope",
+		"These rules are path-scoped. Apply the instructions below only to files matching: `frontend/**`, `src/**/*.tsx`.",
+		"Use atomic design for UI components.",
+	})
 	assertFileContains(t, rulePath, "Use atomic design for UI components.")
 	assertFileNotContains(t, filepath.Join(dir, ".kiro/steering/project-conventions.md"), "## Path-Scoped Rules")
 }
@@ -387,12 +397,47 @@ Use atomic design for UI components.
 	for _, rel := range []string{"frontend/AGENTS.md", "src/AGENTS.md"} {
 		rulePath := filepath.Join(dir, rel)
 		assertFileContains(t, rulePath, "# Codex Path-Scoped Agent Instructions")
+		assertFileContainsInOrder(t, rulePath, []string{
+			"## Scope",
+			"This AGENTS.md applies only to files in this directory tree.",
+			"Apply each rule below only to files matching its listed globs.",
+			"### frontend",
+			"Use atomic design for UI components.",
+		})
 		assertFileContains(t, rulePath, "### frontend")
 		assertFileContains(t, rulePath, "Applies to: `frontend/**`, `src/**/*.tsx`")
 		assertFileContains(t, rulePath, "Use atomic design for UI components.")
 	}
 	assertFileContains(t, filepath.Join(dir, ".codex/scoped-agents-manifest"), "frontend/AGENTS.md")
 	assertFileContains(t, filepath.Join(dir, ".codex/scoped-agents-manifest"), "src/AGENTS.md")
+}
+
+func TestCodexRootPathScopedRulesWarnAboutScope(t *testing.T) {
+	dir := t.TempDir()
+	writeCanonicalSource(t, dir)
+	writeFile(t, dir, ".ai/rules/go.md", `---
+paths:
+  - "*.go"
+---
+
+# Go Rules
+
+Use table-driven tests.
+`)
+
+	if _, err := app.Run(dir, []string{"--target", "codex"}); err != nil {
+		t.Fatalf("targeted sync failed: %v", err)
+	}
+
+	rootAgentsPath := filepath.Join(dir, "AGENTS.md")
+	assertFileContainsInOrder(t, rootAgentsPath, []string{
+		"## Path-Scoped Rules",
+		"## Scope",
+		"The rules below are path-scoped. Apply each rule only to files matching its listed globs.",
+		"### go",
+		"Applies to: `*.go`",
+		"Use table-driven tests.",
+	})
 }
 
 func TestSyncIsIdempotent(t *testing.T) {
@@ -749,6 +794,23 @@ func assertFileNotContains(t *testing.T, path, unwanted string) {
 	}
 	if strings.Contains(string(contents), unwanted) {
 		t.Fatalf("expected %s not to contain %q, got:\n%s", path, unwanted, string(contents))
+	}
+}
+
+func assertFileContainsInOrder(t *testing.T, path string, wants []string) {
+	t.Helper()
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	text := string(contents)
+	offset := 0
+	for _, want := range wants {
+		index := strings.Index(text[offset:], want)
+		if index < 0 {
+			t.Fatalf("expected %s to contain %q after byte %d, got:\n%s", path, want, offset, text)
+		}
+		offset += index + len(want)
 	}
 }
 
