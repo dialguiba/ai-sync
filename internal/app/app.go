@@ -672,6 +672,7 @@ func renderKiro(source source) ([]generatedFile, error) {
 			files = append(files, generatedFile{Path: filepath.ToSlash(filepath.Join(".kiro/powers", sourceSkill.Name, rel)), Content: sourceSkill.Files[rel]})
 		}
 	}
+	files = append(files, copySkills(source.Skills, ".kiro/skills", false)...)
 	return files, nil
 }
 
@@ -836,7 +837,7 @@ func manifestOutputDir(path string) string {
 			return dir
 		}
 	}
-	for _, root := range []string{".claude/skills", ".agents/skills", ".kiro/powers"} {
+	for _, root := range []string{".claude/skills", ".agents/skills", ".kiro/powers", ".kiro/skills"} {
 		prefix := root + "/"
 		if strings.HasPrefix(path, prefix) {
 			remaining := strings.TrimPrefix(path, prefix)
@@ -865,7 +866,7 @@ func pruneTargetOutputs(workdir string, targets []string, outputs []generatedFil
 		case "codex":
 			roots = append(roots, ".agents/skills")
 		case "kiro":
-			roots = append(roots, ".kiro/powers")
+			roots = append(roots, ".kiro/powers", ".kiro/skills")
 			manifestDirs = append(manifestDirs, ".kiro/steering")
 		}
 	}
