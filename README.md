@@ -135,7 +135,7 @@ ai-sync --target codex --response-trace
 ai-sync --dry-run --response-trace
 ```
 
-By default this rule is off. When enabled, generated base guidance tells agents to include a short `Trace` section listing only context loaded during the current response, such as rules read, skills loaded, files inspected, and tools used. Running `ai-sync` again without `--response-trace` removes the generated trace rule.
+By default this rule is off. When enabled, generated base guidance tells agents to include a short `Trace` section listing only context loaded during the current response, such as rules read, skills loaded, files inspected, and tools used. The generated instruction explicitly covers agent files like `AGENTS.md`, nested `*/AGENTS.md`, `CLAUDE.md`, `.claude/rules/*.md`, `.kiro/steering/*.md`, `.ai/rules/*.md`, `.ai/mcp.yaml`, and `SKILL.md` files. Running `ai-sync` again without `--response-trace` removes the generated trace rule.
 
 ## 🧠 Mental model
 
@@ -239,7 +239,7 @@ Use `--response-trace` when you want generated base guidance to ask agents for a
 ai-sync --response-trace
 ```
 
-The trace is intentionally small and per-response only. It should mention what was loaded during the current answer, not the whole conversation history. If no project files were read, the generated instruction tells the agent to say:
+The trace is intentionally small and per-response only. It should mention what was loaded during the current answer, not the whole conversation history. The generated instruction explicitly covers agent instruction files and rule files, including `AGENTS.md`, nested `*/AGENTS.md`, `.kiro/steering/*.md`, and `SKILL.md` files. If no project files were read, the generated instruction tells the agent to say:
 
 ```txt
 Trace: no project files read.

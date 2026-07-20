@@ -733,7 +733,9 @@ func responseTraceGuidance() string {
 	return `
 ## Response Trace
 
-Before answering, include a short Trace section when project files, rules, MCP config, or skills were read during the current response.
+Before answering, include a short Trace section when project files, agent instruction files, path-scoped rules, MCP config, or skills were read during the current response.
+
+Examples include AGENTS.md, nested */AGENTS.md, CLAUDE.md, .claude/rules/*.md, .kiro/steering/*.md, .ai/rules/*.md, .ai/mcp.yaml, and SKILL.md files.
 
 Include only context loaded during the current response:
 - Rules read

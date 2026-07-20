@@ -329,6 +329,9 @@ func TestResponseTraceFlagInjectsTraceRuleIntoBaseGuidance(t *testing.T) {
 		".kiro/steering/project-conventions.md",
 	} {
 		assertFileContains(t, filepath.Join(dir, rel), "## Response Trace")
+		assertFileContains(t, filepath.Join(dir, rel), "agent instruction files, path-scoped rules")
+		assertFileContains(t, filepath.Join(dir, rel), "AGENTS.md")
+		assertFileContains(t, filepath.Join(dir, rel), ".kiro/steering/*.md")
 		assertFileContains(t, filepath.Join(dir, rel), "Trace: no project files read.")
 		assertFileContains(t, filepath.Join(dir, rel), "Keep the Trace short and limited to context loaded during the current response.")
 	}
