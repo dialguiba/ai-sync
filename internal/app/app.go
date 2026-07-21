@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"errors"
@@ -42,6 +43,9 @@ func RunWithBuildInfo(workdir string, args []string, build BuildInfo) (string, e
 	}
 	if len(args) > 0 && args[0] == "list" {
 		return listGeneratedFiles(workdir, args[1:])
+	}
+	if len(args) > 0 && args[0] == "clean" {
+		return cleanGeneratedFiles(workdir, args[1:])
 	}
 	if wantsVersion(args) {
 		return versionText(build), nil
@@ -90,6 +94,163 @@ func RunWithBuildInfo(workdir string, args []string, build BuildInfo) (string, e
 		return "no changes\n", nil
 	}
 	return strings.Join(changes, "\n") + "\n", nil
+}
+
+func cleanGeneratedFiles(workdir string, args []string) (string, error) {
+	var opts options
+	flags := flag.NewFlagSet("ai-sync clean", flag.ContinueOnError)
+	var flagOutput bytes.Buffer
+	flags.SetOutput(&flagOutput)
+	flags.StringVar(&opts.target, "target", "", "target to clean: claude, codex, or kiro")
+	flags.BoolVar(&opts.dryRun, "dry-run", false, "show removals without deleting")
+	flags.BoolVar(&opts.force, "force", false, "skip confirmation")
+	if err := flags.Parse(args); err != nil {
+		output := flagOutput.String()
+		if errors.Is(err, flag.ErrHelp) {
+			return output, nil
+		}
+		return strings.TrimSpace(output), err
+	}
+	if flags.NArg() > 0 {
+		return "", fmt.Errorf("unknown clean argument %q", flags.Arg(0))
+	}
+
+	targets, err := selectedTargets(opts.target)
+	if err != nil {
+		return "", err
+	}
+
+	planned, err := cleanTargetOutputs(workdir, targets, true)
+	if err != nil {
+		return "", err
+	}
+	if len(planned) == 0 {
+		return "no changes\n", nil
+	}
+	if opts.dryRun {
+		return strings.Join(planned, "\n") + "\n", nil
+	}
+	if !opts.force && !confirmClean(planned) {
+		return strings.Join(planned, "\n") + "\nclean aborted\n", nil
+	}
+
+	changes, err := cleanTargetOutputs(workdir, targets, false)
+	if err != nil {
+		return "", err
+	}
+	if len(changes) == 0 {
+		return "no changes\n", nil
+	}
+	return strings.Join(changes, "\n") + "\n", nil
+}
+
+func confirmClean(planned []string) bool {
+	fmt.Fprintln(os.Stderr, "ai-sync clean will remove these generated files:")
+	for _, change := range planned {
+		fmt.Fprintln(os.Stderr, "  "+strings.TrimPrefix(change, "would remove "))
+	}
+	fmt.Fprint(os.Stderr, "Continue? Type yes to confirm: ")
+	answer, err := bufio.NewReader(os.Stdin).ReadString('\n')
+	if err != nil {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(answer), "yes")
+}
+
+func cleanTargetOutputs(workdir string, targets []string, dryRun bool) ([]string, error) {
+	var changes []string
+
+	pruned, err := pruneTargetOutputs(workdir, targets, nil, dryRun)
+	if err != nil {
+		return nil, err
+	}
+	changes = append(changes, pruned...)
+
+	for _, target := range targets {
+		for _, rel := range fixedCleanPaths(target) {
+			removed, err := removeGeneratedPath(workdir, rel, dryRun)
+			if err != nil {
+				return nil, err
+			}
+			changes = append(changes, removed...)
+		}
+	}
+
+	if !dryRun && targetSelected(targets, "codex") {
+		removeEmptyParentsUntil(filepath.Join(workdir, ".codex"), workdir)
+	}
+	return sortedUniqueStrings(changes), nil
+}
+
+func sortedUniqueStrings(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	sort.Strings(values)
+	unique := values[:0]
+	for _, value := range values {
+		if len(unique) == 0 || unique[len(unique)-1] != value {
+			unique = append(unique, value)
+		}
+	}
+	return unique
+}
+
+func fixedCleanPaths(target string) []string {
+	switch target {
+	case "claude":
+		return []string{"CLAUDE.md", ".claude/settings.json", ".mcp.json"}
+	case "codex":
+		return []string{"AGENTS.md", ".codex/config.toml", ".codex/scoped-agents-manifest"}
+	case "kiro":
+		return []string{".kiro/settings/mcp.json"}
+	default:
+		return nil
+	}
+}
+
+func removeGeneratedPath(workdir, rel string, dryRun bool) ([]string, error) {
+	path := filepath.Join(workdir, filepath.FromSlash(rel))
+	info, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("stat %s: %w", rel, err)
+	}
+	if info.IsDir() {
+		return nil, nil
+	}
+
+	if requiresGeneratedMarker(rel) {
+		contents, err := os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("read %s: %w", rel, err)
+		}
+		if !hasGeneratedMarker(contents) {
+			return nil, nil
+		}
+	}
+
+	verb := "removed"
+	if dryRun {
+		verb = "would remove"
+	} else if err := os.Remove(path); err != nil {
+		return nil, fmt.Errorf("remove %s: %w", rel, err)
+	}
+	if !dryRun {
+		removeEmptyParentsUntil(filepath.Dir(path), workdir)
+	}
+	return []string{verb + " " + rel}, nil
+}
+
+func requiresGeneratedMarker(rel string) bool {
+	switch rel {
+	case ".claude/settings.json", ".mcp.json", ".kiro/settings/mcp.json", ".codex/scoped-agents-manifest":
+		return false
+	default:
+		return true
+	}
 }
 
 func listGeneratedFiles(workdir string, args []string) (string, error) {
@@ -147,17 +308,21 @@ Usage:
   ai-sync init
   ai-sync convention
   ai-sync list
+  ai-sync clean --dry-run
+  ai-sync clean --force
   ai-sync version
 
 Commands:
   init              scaffold a starter .ai/ directory
   convention        print the .ai authoring convention for humans or AI agents
   list              print generated file paths without writing files
+  clean             remove ai-sync generated files so the next sync starts fresh
   version           print version and build metadata
 
 Options:
-  --target string   target to generate: claude, codex, or kiro
+  --target string   target to generate, list, or clean: claude, codex, or kiro
   --dry-run         show changes without writing
+  --force           skip clean confirmation
   --version, -v     print version and build metadata
   --help, -h        show help
 
@@ -165,6 +330,8 @@ Examples:
   ai-sync init
   ai-sync convention
   ai-sync list
+  ai-sync clean --dry-run
+  ai-sync clean --force
   ai-sync version
   ai-sync
   ai-sync --target codex
@@ -237,6 +404,7 @@ Create the .ai/ directory using the ai-sync convention. Add shared project guida
 type options struct {
 	target string
 	dryRun bool
+	force  bool
 }
 
 type source struct {
@@ -1053,6 +1221,7 @@ func outputTreeExists(keep map[string]struct{}, root string) bool {
 }
 
 func pruneGeneratedTree(workdir, relRoot, dirPath string, dryRun bool) ([]string, error) {
+	targetRootPath := filepath.Dir(dirPath)
 	manifestPath := filepath.Join(dirPath, ".ai-sync-manifest")
 	manifest, err := os.ReadFile(manifestPath)
 	if err != nil {
@@ -1088,6 +1257,9 @@ func pruneGeneratedTree(workdir, relRoot, dirPath string, dryRun bool) ([]string
 			return nil, fmt.Errorf("remove %s/%s: %w", relRoot, generatedRel, err)
 		}
 		changes = append(changes, verb+" "+relRoot+"/"+generatedRel)
+		if !dryRun {
+			removeEmptyParentsUntil(filepath.Dir(fullPath), targetRootPath)
+		}
 	}
 
 	if dryRun {
@@ -1097,7 +1269,7 @@ func pruneGeneratedTree(workdir, relRoot, dirPath string, dryRun bool) ([]string
 	if err := os.Remove(manifestPath); err != nil && !os.IsNotExist(err) {
 		return nil, fmt.Errorf("remove %s/.ai-sync-manifest: %w", relRoot, err)
 	}
-	removeEmptyParents(dirPath)
+	removeEmptyParentsUntil(dirPath, targetRootPath)
 	return changes, nil
 }
 
@@ -1110,12 +1282,26 @@ func safeRelativePath(path string) bool {
 }
 
 func removeEmptyParents(path string) {
+	removeEmptyParentsUntil(path, "")
+}
+
+func removeEmptyParentsUntil(path, stopPath string) {
+	if stopPath != "" {
+		stopPath = filepath.Clean(stopPath)
+	}
 	for {
+		path = filepath.Clean(path)
+		if stopPath != "" && path == stopPath {
+			return
+		}
 		if err := os.Remove(path); err != nil {
 			return
 		}
 		parent := filepath.Dir(path)
-		if parent == path || filepath.Base(parent) == ".claude" || filepath.Base(parent) == ".agents" || filepath.Base(parent) == ".kiro" {
+		if parent == path {
+			return
+		}
+		if stopPath == "" && (filepath.Base(parent) == ".claude" || filepath.Base(parent) == ".agents" || filepath.Base(parent) == ".kiro") {
 			return
 		}
 		path = parent

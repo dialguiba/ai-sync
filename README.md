@@ -116,6 +116,7 @@ ai-sync version     # print version and build metadata
 ai-sync             # generate Claude, Codex, and Kiro files
 ai-sync --dry-run   # preview changes without writing files
 ai-sync list        # list generated file paths without writing files
+ai-sync clean       # remove generated files for a fresh regeneration
 ```
 
 Generate only one target when needed:
@@ -124,6 +125,15 @@ Generate only one target when needed:
 ai-sync --target claude
 ai-sync --target codex
 ai-sync --target kiro
+```
+
+Reset generated files when you need a fresh regeneration:
+
+```sh
+ai-sync clean --dry-run        # preview generated files that would be removed
+ai-sync clean --force          # remove all ai-sync managed outputs
+ai-sync clean --target kiro    # clean only one target
+ai-sync clean && ai-sync       # clean, then regenerate from .ai/
 ```
 
 ## 🧠 Mental model
@@ -315,13 +325,16 @@ Supporting files inside the skill folder are copied too.
 
 `ai-sync` writes generated headers and manifest files for generated directories it manages, including skills, Claude rules, Codex scoped `AGENTS.md` files, Kiro steering files, Kiro Skills, and Kiro Powers.
 
-Those manifests let the CLI prune stale generated files without deleting user-owned files added manually inside generated folders.
+Those manifests let the CLI prune stale generated files without deleting user-owned files added manually inside generated folders. When manifest-owned files are removed, `ai-sync` also removes now-empty generated parent directories bottom-up, stopping at the target root such as `.kiro/skills/` or `.agents/skills/`.
+
+`ai-sync clean` uses the same ownership rules to remove generated outputs for a fresh start. It removes manifest-owned files, generated fixed outputs such as `CLAUDE.md` and `AGENTS.md` only when they still contain the ai-sync marker, and managed config files that ai-sync owns by path such as `.mcp.json`, `.claude/settings.json`, and `.kiro/settings/mcp.json`. It preserves manual files that are not listed in an ai-sync manifest and do not contain the generated marker.
 
 Practical rule:
 
 - ✅ Files listed in `.ai-sync-manifest` or `.codex/scoped-agents-manifest` are owned by `ai-sync`
 - 🛡️ Files you add manually but that are not listed in the manifest are preserved
 - ⚠️ If `ai-sync` is about to overwrite an existing output file without an ai-sync generated marker, it prints a warning before writing it
+- 🧹 Use `ai-sync clean --dry-run` before a reset to inspect exactly what would be removed
 
 ## 👨‍💻 Local development
 
@@ -342,6 +355,7 @@ go run ./cmd/ai-sync
 go run ./cmd/ai-sync --target codex
 go run ./cmd/ai-sync --dry-run
 go run ./cmd/ai-sync list
+go run ./cmd/ai-sync clean --dry-run
 ```
 
 ## 🚧 Current limitations

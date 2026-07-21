@@ -513,6 +513,147 @@ func TestSyncPrunesStaleGeneratedSkillOutputs(t *testing.T) {
 	assertFileMissing(t, filepath.Join(dir, ".kiro/skills/playwright-cli"))
 }
 
+func TestPruneRemovesEmptyGeneratedSkillParentDirectories(t *testing.T) {
+	dir := t.TempDir()
+	writeCanonicalSource(t, dir)
+	writeFile(t, dir, ".ai/skills/playwright-cli/references/checklist.md", "# Checklist\n")
+
+	if _, err := app.Run(dir, nil); err != nil {
+		t.Fatalf("initial sync failed: %v", err)
+	}
+	if err := os.RemoveAll(filepath.Join(dir, ".ai/skills/playwright-cli")); err != nil {
+		t.Fatalf("remove source skill: %v", err)
+	}
+
+	if _, err := app.Run(dir, []string{"--target", "kiro"}); err != nil {
+		t.Fatalf("sync after skill removal failed: %v", err)
+	}
+
+	assertFileMissing(t, filepath.Join(dir, ".kiro/skills/playwright-cli/references"))
+	assertFileMissing(t, filepath.Join(dir, ".kiro/skills/playwright-cli"))
+	assertFileExists(t, filepath.Join(dir, ".kiro/skills"))
+}
+
+func TestCleanForceRemovesGeneratedOutputsAndPreservesManualFiles(t *testing.T) {
+	dir := t.TempDir()
+	writeCanonicalSource(t, dir)
+	writeFile(t, dir, ".ai/rules/frontend.md", `---
+paths:
+  - "frontend/**"
+---
+
+# Frontend Rules
+`)
+
+	if _, err := app.Run(dir, nil); err != nil {
+		t.Fatalf("initial sync failed: %v", err)
+	}
+	writeFile(t, dir, ".kiro/steering/manual.md", "# Manual Kiro Steering\n")
+	writeFile(t, dir, ".agents/skills/manual/SKILL.md", "# Manual Codex Skill\n")
+
+	out, err := app.Run(dir, []string{"clean", "--force"})
+	if err != nil {
+		t.Fatalf("clean failed: %v", err)
+	}
+	for _, want := range []string{
+		"removed CLAUDE.md",
+		"removed AGENTS.md",
+		"removed .codex/scoped-agents-manifest",
+		"removed .kiro/skills/playwright-cli/SKILL.md",
+		"removed .kiro/powers/playwright-cli/POWER.md",
+		"removed .kiro/settings/mcp.json",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("expected clean output to include %q, got %q", want, out)
+		}
+	}
+
+	assertFileMissing(t, filepath.Join(dir, "CLAUDE.md"))
+	assertFileMissing(t, filepath.Join(dir, "AGENTS.md"))
+	assertFileMissing(t, filepath.Join(dir, ".codex/scoped-agents-manifest"))
+	assertFileMissing(t, filepath.Join(dir, ".kiro/skills/playwright-cli"))
+	assertFileMissing(t, filepath.Join(dir, ".kiro/powers/playwright-cli"))
+	assertFileExists(t, filepath.Join(dir, ".kiro/steering/manual.md"))
+	assertFileExists(t, filepath.Join(dir, ".agents/skills/manual/SKILL.md"))
+}
+
+func TestCleanTargetOnlyRemovesSelectedTarget(t *testing.T) {
+	dir := t.TempDir()
+	writeCanonicalSource(t, dir)
+
+	if _, err := app.Run(dir, nil); err != nil {
+		t.Fatalf("initial sync failed: %v", err)
+	}
+
+	out, err := app.Run(dir, []string{"clean", "--target", "kiro", "--force"})
+	if err != nil {
+		t.Fatalf("targeted clean failed: %v", err)
+	}
+	if strings.Contains(out, "CLAUDE.md") || strings.Contains(out, "AGENTS.md") {
+		t.Fatalf("expected targeted Kiro clean not to touch Claude or Codex outputs, got %q", out)
+	}
+
+	assertFileExists(t, filepath.Join(dir, "CLAUDE.md"))
+	assertFileExists(t, filepath.Join(dir, "AGENTS.md"))
+	assertFileMissing(t, filepath.Join(dir, ".kiro/skills/playwright-cli"))
+}
+
+func TestCleanPreservesUnmarkedRootAgentFiles(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "AGENTS.md", "# Manual Agent Instructions\n")
+
+	out, err := app.Run(dir, []string{"clean", "--target", "codex", "--force"})
+	if err != nil {
+		t.Fatalf("clean failed: %v", err)
+	}
+	if strings.Contains(out, "removed AGENTS.md") {
+		t.Fatalf("expected clean to preserve unmarked manual AGENTS.md, got %q", out)
+	}
+	assertFileExists(t, filepath.Join(dir, "AGENTS.md"))
+}
+
+func TestCleanDryRunReportsEachGeneratedPathOnce(t *testing.T) {
+	dir := t.TempDir()
+	writeCanonicalSource(t, dir)
+	writeFile(t, dir, ".ai/rules/frontend.md", `---
+paths:
+  - "frontend/**"
+---
+
+# Frontend Rules
+`)
+
+	if _, err := app.Run(dir, []string{"--target", "codex"}); err != nil {
+		t.Fatalf("initial sync failed: %v", err)
+	}
+
+	out, err := app.Run(dir, []string{"clean", "--target", "codex", "--dry-run"})
+	if err != nil {
+		t.Fatalf("clean dry-run failed: %v", err)
+	}
+	if count := strings.Count(out, "would remove .codex/scoped-agents-manifest"); count != 1 {
+		t.Fatalf("expected scoped agents manifest to be reported once, got %d in %q", count, out)
+	}
+}
+
+func TestCleanDryRunDoesNotRemoveGeneratedOutputs(t *testing.T) {
+	dir := t.TempDir()
+	writeCanonicalSource(t, dir)
+
+	if _, err := app.Run(dir, nil); err != nil {
+		t.Fatalf("initial sync failed: %v", err)
+	}
+
+	out, err := app.Run(dir, []string{"clean", "--dry-run"})
+	if err != nil {
+		t.Fatalf("clean dry-run failed: %v", err)
+	}
+	if !strings.Contains(out, "would remove CLAUDE.md") {
+		t.Fatalf("expected dry-run output, got %q", out)
+	}
+	assertFileExists(t, filepath.Join(dir, "CLAUDE.md"))
+}
+
 func TestPruneRemovesStaleGeneratedPathRules(t *testing.T) {
 	dir := t.TempDir()
 	writeCanonicalSource(t, dir)
