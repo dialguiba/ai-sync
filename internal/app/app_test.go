@@ -97,6 +97,7 @@ func TestInitCreatesCanonicalSource(t *testing.T) {
 		".ai/targets/claude.md",
 		".ai/targets/codex.md",
 		".ai/targets/kiro.md",
+		".ai/plugins.yaml",
 		".ai/rules/example.md",
 		".ai/skills/example/SKILL.md",
 	} {
@@ -874,6 +875,157 @@ func TestSyncWithoutCanonicalSourceReturnsActionableError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "run `ai-sync init`") {
 		t.Fatalf("expected actionable init hint, got %v", err)
+	}
+}
+
+func TestPluginsDryRunPrintsTheInstallCommands(t *testing.T) {
+	dir := t.TempDir()
+	writeCanonicalSource(t, dir)
+	writeFile(t, dir, ".ai/plugins.yaml", `plugins:
+  mattpocock-skills@mattpocock: true
+  scratch@local-lab: false
+`)
+
+	out, err := app.Run(dir, []string{"plugins", "--dry-run"})
+	if err != nil {
+		t.Fatalf("plugins should not return an error: %v", err)
+	}
+	for _, want := range []string{
+		"would run: claude plugin install mattpocock-skills@mattpocock --scope project --yes\n",
+		"skipped scratch@local-lab (disabled in .ai/plugins.yaml)\n",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("expected plugins output to contain %q, got:\n%s", want, out)
+		}
+	}
+}
+
+func TestPluginsDryRunHonoursScope(t *testing.T) {
+	dir := t.TempDir()
+	writeCanonicalSource(t, dir)
+	writeFile(t, dir, ".ai/plugins.yaml", "plugins:\n  ponytail@ponytail: true\n")
+
+	out, err := app.Run(dir, []string{"plugins", "--dry-run", "--scope", "local"})
+	if err != nil {
+		t.Fatalf("plugins should not return an error: %v", err)
+	}
+	if !strings.Contains(out, "--scope local --yes") {
+		t.Fatalf("expected the local scope in the command, got:\n%s", out)
+	}
+}
+
+func TestPluginsWithoutDeclarationsIsANoop(t *testing.T) {
+	dir := t.TempDir()
+	writeCanonicalSource(t, dir)
+
+	out, err := app.Run(dir, []string{"plugins"})
+	if err != nil {
+		t.Fatalf("plugins should not return an error: %v", err)
+	}
+	if out != "no plugins declared in .ai/plugins.yaml\n" {
+		t.Fatalf("unexpected output: %q", out)
+	}
+}
+
+func TestPluginsRejectsUnknownScope(t *testing.T) {
+	dir := t.TempDir()
+	writeCanonicalSource(t, dir)
+	writeFile(t, dir, ".ai/plugins.yaml", "plugins:\n  ponytail@ponytail: true\n")
+
+	_, err := app.Run(dir, []string{"plugins", "--scope", "global"})
+	if err == nil {
+		t.Fatal("expected an error for an unknown scope")
+	}
+	if !strings.Contains(err.Error(), "expected project, user, or local") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestSyncRendersPluginsIntoClaudeSettings(t *testing.T) {
+	dir := t.TempDir()
+	writeCanonicalSource(t, dir)
+	writeFile(t, dir, ".ai/plugins.yaml", `marketplaces:
+  mattpocock:
+    repo: mattpocock/skills
+  local-lab:
+    path: ../plugin-lab
+plugins:
+  mattpocock-skills@mattpocock: true
+  scratch@local-lab: false
+env:
+  PONYTAIL_DEFAULT_MODE: "off"
+`)
+
+	if _, err := app.Run(dir, nil); err != nil {
+		t.Fatalf("sync should not return an error: %v", err)
+	}
+
+	settings := filepath.Join(dir, ".claude/settings.json")
+	assertFileContainsInOrder(t, settings, []string{
+		`"enabledPlugins"`,
+		`"mattpocock-skills@mattpocock": true`,
+		`"scratch@local-lab": false`,
+		`"env"`,
+		`"PONYTAIL_DEFAULT_MODE": "off"`,
+		`"extraKnownMarketplaces"`,
+		`"local-lab"`,
+		`"path": "../plugin-lab"`,
+		`"source": "path"`,
+		`"mattpocock"`,
+		`"repo": "mattpocock/skills"`,
+		`"source": "github"`,
+		`"permissions"`,
+	})
+
+	assertFileNotContains(t, filepath.Join(dir, ".codex/config.toml"), "mattpocock")
+}
+
+func TestSyncKeepsClaudeSettingsMinimalWithoutPluginsFile(t *testing.T) {
+	dir := t.TempDir()
+	writeCanonicalSource(t, dir)
+
+	if _, err := app.Run(dir, nil); err != nil {
+		t.Fatalf("sync should not return an error: %v", err)
+	}
+
+	settings := filepath.Join(dir, ".claude/settings.json")
+	assertFileContains(t, settings, `"permissions"`)
+	assertFileNotContains(t, settings, "enabledPlugins")
+	assertFileNotContains(t, settings, "extraKnownMarketplaces")
+}
+
+func TestSyncRejectsInvalidPluginsFile(t *testing.T) {
+	for name, testCase := range map[string]struct {
+		contents string
+		want     string
+	}{
+		"plugin without marketplace": {
+			contents: "plugins:\n  mattpocock-skills: true\n",
+			want:     "expected the form <plugin>@<marketplace>",
+		},
+		"github marketplace without repo": {
+			contents: "marketplaces:\n  mattpocock:\n    source: github\n",
+			want:     "github source needs a repo",
+		},
+		"marketplace without any source": {
+			contents: "marketplaces:\n  mattpocock: {}\n",
+			want:     "unknown source",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeCanonicalSource(t, dir)
+			writeFile(t, dir, ".ai/plugins.yaml", testCase.contents)
+
+			_, err := app.Run(dir, nil)
+			if err == nil {
+				t.Fatalf("expected an error for %s", name)
+			}
+			if !strings.Contains(err.Error(), testCase.want) {
+				t.Fatalf("expected error to contain %q, got %q", testCase.want, err.Error())
+			}
+			assertFileMissing(t, filepath.Join(dir, ".claude/settings.json"))
+		})
 	}
 }
 

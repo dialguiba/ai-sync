@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -43,6 +44,9 @@ func RunWithBuildInfo(workdir string, args []string, build BuildInfo) (string, e
 	}
 	if len(args) > 0 && args[0] == "list" {
 		return listGeneratedFiles(workdir, args[1:])
+	}
+	if len(args) > 0 && args[0] == "plugins" {
+		return installPlugins(workdir, args[1:])
 	}
 	if len(args) > 0 && args[0] == "clean" {
 		return cleanGeneratedFiles(workdir, args[1:])
@@ -92,6 +96,68 @@ func RunWithBuildInfo(workdir string, args []string, build BuildInfo) (string, e
 	changes = append(changes, written...)
 	if len(changes) == 0 {
 		return "no changes\n", nil
+	}
+	return strings.Join(changes, "\n") + "\n", nil
+}
+
+func installPlugins(workdir string, args []string) (string, error) {
+	var opts options
+	flags := flag.NewFlagSet("ai-sync plugins", flag.ContinueOnError)
+	var flagOutput bytes.Buffer
+	flags.SetOutput(&flagOutput)
+	flags.StringVar(&opts.scope, "scope", "project", "scope passed to claude plugin install: project, user, or local")
+	flags.BoolVar(&opts.dryRun, "dry-run", false, "print the install commands without running them")
+	if err := flags.Parse(args); err != nil {
+		output := flagOutput.String()
+		if errors.Is(err, flag.ErrHelp) {
+			return output, nil
+		}
+		return strings.TrimSpace(output), err
+	}
+	if flags.NArg() > 0 {
+		return "", fmt.Errorf("unknown plugins argument %q", flags.Arg(0))
+	}
+	switch opts.scope {
+	case "project", "user", "local":
+	default:
+		return "", fmt.Errorf("unknown scope %q; expected project, user, or local", opts.scope)
+	}
+
+	config, err := loadPlugins(filepath.Join(workdir, ".ai", "plugins.yaml"))
+	if err != nil {
+		return "", err
+	}
+	if len(config.Plugins) == 0 {
+		return "no plugins declared in .ai/plugins.yaml\n", nil
+	}
+
+	var claudePath string
+	if !opts.dryRun {
+		claudePath, err = exec.LookPath("claude")
+		if err != nil {
+			return "", errors.New("claude not found in PATH; the Claude Code CLI installs the plugins that .ai/plugins.yaml declares")
+		}
+	}
+
+	var changes []string
+	for _, name := range sortedStringMapKeys(config.Plugins) {
+		if !config.Plugins[name] {
+			changes = append(changes, "skipped "+name+" (disabled in .ai/plugins.yaml)")
+			continue
+		}
+		installArgs := []string{"plugin", "install", name, "--scope", opts.scope, "--yes"}
+		if opts.dryRun {
+			changes = append(changes, "would run: claude "+strings.Join(installArgs, " "))
+			continue
+		}
+		command := exec.Command(claudePath, installArgs...)
+		command.Dir = workdir
+		output, err := command.CombinedOutput()
+		if err != nil {
+			changes = append(changes, "failed "+name)
+			return strings.Join(changes, "\n") + "\n", fmt.Errorf("claude plugin install %s: %w\n%s", name, err, strings.TrimSpace(string(output)))
+		}
+		changes = append(changes, "installed "+name)
 	}
 	return strings.Join(changes, "\n") + "\n", nil
 }
@@ -308,6 +374,7 @@ Usage:
   ai-sync init
   ai-sync convention
   ai-sync list
+  ai-sync plugins [--scope project|user|local] [--dry-run]
   ai-sync clean --dry-run
   ai-sync clean --force
   ai-sync version
@@ -316,11 +383,13 @@ Commands:
   init              scaffold a starter .ai/ directory
   convention        print the .ai authoring convention for humans or AI agents
   list              print generated file paths without writing files
+  plugins           install the Claude Code plugins declared in .ai/plugins.yaml
   clean             remove ai-sync generated files so the next sync starts fresh
   version           print version and build metadata
 
 Options:
   --target string   target to generate, list, or clean: claude, codex, or kiro
+  --scope string    plugins install scope: project (default), user, or local
   --dry-run         show changes without writing
   --force           skip clean confirmation
   --version, -v     print version and build metadata
@@ -330,6 +399,8 @@ Examples:
   ai-sync init
   ai-sync convention
   ai-sync list
+  ai-sync plugins
+  ai-sync plugins --dry-run
   ai-sync clean --dry-run
   ai-sync clean --force
   ai-sync version
@@ -352,7 +423,7 @@ Create a canonical .ai/ directory for the project. ai-sync reads this directory 
 
 ## Goal
 
-Use .ai/ as the single source of truth for AI-agent configuration. Do not create generated agent files directly, such as CLAUDE.md, AGENTS.md, .mcp.json, .codex/config.toml, or .kiro/settings/mcp.json.
+Use .ai/ as the single source of truth for AI-agent configuration. Do not create generated agent files directly, such as CLAUDE.md, AGENTS.md, .claude/settings.json, .mcp.json, .codex/config.toml, or .kiro/settings/mcp.json.
 
 ## Required structure
 
@@ -360,6 +431,7 @@ Use .ai/ as the single source of truth for AI-agent configuration. Do not create
 .ai/
   project.md
   mcp.yaml
+  plugins.yaml
   targets/
     claude.md
     codex.md
@@ -380,6 +452,7 @@ Use .ai/ as the single source of truth for AI-agent configuration. Do not create
 | --- | --- |
 | .ai/project.md | Shared project rules, architecture, commands, conventions, and review expectations. |
 | .ai/mcp.yaml | Shared MCP server definitions. Reference environment variables instead of hardcoding secrets. |
+| .ai/plugins.yaml | Optional Claude Code plugin marketplaces, the plugins to enable, and the environment variables those plugins read. |
 | .ai/targets/claude.md | Claude Code-specific guidance only. |
 | .ai/targets/codex.md | Codex-specific guidance only. |
 | .ai/targets/kiro.md | Kiro-specific guidance only. |
@@ -392,17 +465,19 @@ Use .ai/ as the single source of truth for AI-agent configuration. Do not create
 - Put agent-specific overrides in .ai/targets/<target>.md.
 - Put path-scoped guidance in .ai/rules/<name>.md with a paths list in YAML frontmatter. ai-sync maps these rules to native Claude Code .claude/rules files, native Kiro fileMatch steering files, and nested Codex AGENTS.md files.
 - Put reusable workflows in .ai/skills/<name>/SKILL.md.
-- Keep secrets out of .ai/mcp.yaml; use environment variables.
+- Declare Claude Code plugin marketplaces and plugins in .ai/plugins.yaml. Only the Claude target reads this file. Run ai-sync plugins after the sync; declaring a plugin enables it, but the Claude Code CLI is what installs it.
+- Keep secrets out of .ai/mcp.yaml and .ai/plugins.yaml; use environment variables.
 - Do not create generated agent files directly. Run ai-sync after creating or editing .ai/.
 
 ## Suggested prompt for an AI agent
 
-Create the .ai/ directory using the ai-sync convention. Add shared project guidance to .ai/project.md, define MCP servers in .ai/mcp.yaml, put agent-specific instructions under .ai/targets/, add path-scoped guidance under .ai/rules/<name>.md, and add reusable workflows under .ai/skills/<name>/SKILL.md. Do not create CLAUDE.md, AGENTS.md, .codex/config.toml, .mcp.json, or .kiro/settings/mcp.json directly.
+Create the .ai/ directory using the ai-sync convention. Add shared project guidance to .ai/project.md, define MCP servers in .ai/mcp.yaml, declare Claude Code plugins in .ai/plugins.yaml, put agent-specific instructions under .ai/targets/, add path-scoped guidance under .ai/rules/<name>.md, and add reusable workflows under .ai/skills/<name>/SKILL.md. Do not create CLAUDE.md, AGENTS.md, .codex/config.toml, .mcp.json, or .kiro/settings/mcp.json directly.
 `
 }
 
 type options struct {
 	target string
+	scope  string
 	dryRun bool
 	force  bool
 }
@@ -412,6 +487,7 @@ type source struct {
 	Targets map[string]string
 	Rules   []pathRule
 	MCP     mcpConfig
+	Plugins pluginConfig
 	Skills  []skill
 }
 
@@ -423,6 +499,19 @@ type mcpServer struct {
 	Command string            `yaml:"command"`
 	Args    []string          `yaml:"args"`
 	Env     map[string]string `yaml:"env"`
+}
+
+type pluginConfig struct {
+	Marketplaces map[string]marketplaceSource `yaml:"marketplaces"`
+	Plugins      map[string]bool              `yaml:"plugins"`
+	Env          map[string]string            `yaml:"env"`
+}
+
+type marketplaceSource struct {
+	Source string `yaml:"source"`
+	Repo   string `yaml:"repo"`
+	URL    string `yaml:"url"`
+	Path   string `yaml:"path"`
 }
 
 type pathRule struct {
@@ -449,6 +538,7 @@ func initSource(workdir string) (string, error) {
 	files := []generatedFile{
 		{Path: ".ai/project.md", Content: []byte("# Project\n\nDescribe shared stack, commands, conventions, and review expectations here.\n")},
 		{Path: ".ai/mcp.yaml", Content: []byte("servers: {}\n")},
+		{Path: ".ai/plugins.yaml", Content: []byte("marketplaces: {}\nplugins: {}\n")},
 		{Path: ".ai/targets/claude.md", Content: []byte("# Claude Code\n\nAdd Claude-specific guidance here.\n")},
 		{Path: ".ai/targets/codex.md", Content: []byte("# Codex\n\nAdd Codex-specific guidance here.\n")},
 		{Path: ".ai/targets/kiro.md", Content: []byte("# Kiro\n\nAdd Kiro-specific guidance here.\n")},
@@ -491,6 +581,11 @@ func loadSource(workdir string) (source, error) {
 		mcp.Servers = map[string]mcpServer{}
 	}
 
+	plugins, err := loadPlugins(filepath.Join(root, "plugins.yaml"))
+	if err != nil {
+		return source{}, err
+	}
+
 	targets := make(map[string]string, len(allTargets))
 	for _, target := range allTargets {
 		path := filepath.Join(root, "targets", target+".md")
@@ -511,7 +606,7 @@ func loadSource(workdir string) (source, error) {
 		return source{}, err
 	}
 
-	return source{Project: project, Targets: targets, Rules: rules, MCP: mcp, Skills: skills}, nil
+	return source{Project: project, Targets: targets, Rules: rules, MCP: mcp, Plugins: plugins, Skills: skills}, nil
 }
 
 func readRequiredText(path string) (string, error) {
@@ -604,6 +699,77 @@ func splitYAMLFrontmatter(text string) (string, string, bool) {
 		frontmatter.WriteString(line)
 	}
 	return "", "", false
+}
+
+func loadPlugins(path string) (pluginConfig, error) {
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return pluginConfig{}, nil
+		}
+		return pluginConfig{}, fmt.Errorf("read .ai/plugins.yaml: %w", err)
+	}
+
+	var config pluginConfig
+	if err := yaml.Unmarshal(contents, &config); err != nil {
+		return pluginConfig{}, fmt.Errorf("parse .ai/plugins.yaml: %w", err)
+	}
+
+	for _, name := range sortedStringMapKeys(config.Marketplaces) {
+		if err := validateMarketplace(name, config.Marketplaces[name]); err != nil {
+			return pluginConfig{}, err
+		}
+	}
+	for _, name := range sortedStringMapKeys(config.Plugins) {
+		if err := validatePluginKey(name); err != nil {
+			return pluginConfig{}, err
+		}
+	}
+	return config, nil
+}
+
+func validateMarketplace(name string, marketplace marketplaceSource) error {
+	switch resolveMarketplaceSource(marketplace) {
+	case "github":
+		if marketplace.Repo == "" {
+			return fmt.Errorf(".ai/plugins.yaml marketplace %q: github source needs a repo", name)
+		}
+	case "url":
+		if marketplace.URL == "" {
+			return fmt.Errorf(".ai/plugins.yaml marketplace %q: url source needs a url", name)
+		}
+	case "path":
+		if marketplace.Path == "" {
+			return fmt.Errorf(".ai/plugins.yaml marketplace %q: path source needs a path", name)
+		}
+	default:
+		return fmt.Errorf(".ai/plugins.yaml marketplace %q: unknown source %q; expected github, url, or path", name, marketplace.Source)
+	}
+	return nil
+}
+
+func resolveMarketplaceSource(marketplace marketplaceSource) string {
+	if marketplace.Source != "" {
+		return marketplace.Source
+	}
+	switch {
+	case marketplace.Repo != "":
+		return "github"
+	case marketplace.URL != "":
+		return "url"
+	case marketplace.Path != "":
+		return "path"
+	default:
+		return ""
+	}
+}
+
+func validatePluginKey(key string) error {
+	plugin, marketplace, ok := strings.Cut(key, "@")
+	if !ok || plugin == "" || marketplace == "" || strings.Contains(marketplace, "@") {
+		return fmt.Errorf(".ai/plugins.yaml plugin %q: expected the form <plugin>@<marketplace>", key)
+	}
+	return nil
 }
 
 func loadSkills(root string) ([]skill, error) {
@@ -699,7 +865,7 @@ func renderTarget(target string, source source) ([]generatedFile, error) {
 func renderClaude(source source) ([]generatedFile, error) {
 	files := []generatedFile{
 		{Path: "CLAUDE.md", Content: renderGuidance("Claude Code", source.Project, source.Targets["claude"], nil)},
-		{Path: ".claude/settings.json", Content: mustJSON(map[string]any{"permissions": map[string]any{}})},
+		{Path: ".claude/settings.json", Content: renderClaudeSettings(source.Plugins)},
 		{Path: ".mcp.json", Content: mustJSON(map[string]any{"mcpServers": mcpServersJSON(source.MCP)})},
 	}
 	for _, rule := range source.Rules {
@@ -707,6 +873,46 @@ func renderClaude(source source) ([]generatedFile, error) {
 	}
 	files = append(files, copySkills(source.Skills, ".claude/skills", false)...)
 	return files, nil
+}
+
+func renderClaudeSettings(config pluginConfig) []byte {
+	settings := map[string]any{"permissions": map[string]any{}}
+	if len(config.Marketplaces) > 0 {
+		marketplaces := map[string]any{}
+		for _, name := range sortedStringMapKeys(config.Marketplaces) {
+			marketplaces[name] = map[string]any{"source": marketplaceSourceJSON(config.Marketplaces[name])}
+		}
+		settings["extraKnownMarketplaces"] = marketplaces
+	}
+	if len(config.Plugins) > 0 {
+		enabled := map[string]any{}
+		for _, name := range sortedStringMapKeys(config.Plugins) {
+			enabled[name] = config.Plugins[name]
+		}
+		settings["enabledPlugins"] = enabled
+	}
+	if len(config.Env) > 0 {
+		env := map[string]any{}
+		for _, name := range sortedMapKeys(config.Env) {
+			env[name] = config.Env[name]
+		}
+		settings["env"] = env
+	}
+	return mustJSON(settings)
+}
+
+func marketplaceSourceJSON(marketplace marketplaceSource) map[string]any {
+	source := resolveMarketplaceSource(marketplace)
+	entry := map[string]any{"source": source}
+	switch source {
+	case "github":
+		entry["repo"] = marketplace.Repo
+	case "url":
+		entry["url"] = marketplace.URL
+	case "path":
+		entry["path"] = marketplace.Path
+	}
+	return entry
 }
 
 func renderClaudeRule(rule pathRule) []byte {

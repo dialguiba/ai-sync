@@ -144,6 +144,7 @@ You edit this:
 .ai/
   project.md
   mcp.yaml
+  plugins.yaml
   targets/
     claude.md
     codex.md
@@ -175,6 +176,7 @@ Kiro         -> .kiro/steering/, .kiro/settings/mcp.json, .kiro/powers/, .kiro/s
 | `.ai/targets/kiro.md` | — | — | `.kiro/steering/project-conventions.md` target-specific section |
 | `.ai/rules/<name>.md` | `.claude/rules/<name>.md` with `paths` frontmatter | nested `<scope>/AGENTS.md` files, or root `AGENTS.md` when no narrower directory exists | `.kiro/steering/<name>.md` with `inclusion: fileMatch` |
 | `.ai/mcp.yaml` | `.mcp.json` | `.codex/config.toml` | `.kiro/settings/mcp.json` |
+| `.ai/plugins.yaml` | `.claude/settings.json` (`extraKnownMarketplaces`, `enabledPlugins`, `env`) | — | — |
 | `.ai/skills/<name>/SKILL.md` | `.claude/skills/<name>/SKILL.md` | `.agents/skills/<name>/SKILL.md` | `.kiro/skills/<name>/SKILL.md` and `.kiro/powers/<name>/POWER.md` |
 | extra files under `.ai/skills/<name>/` | copied under `.claude/skills/<name>/` | copied under `.agents/skills/<name>/` | copied under `.kiro/skills/<name>/` and `.kiro/powers/<name>/` |
 
@@ -282,6 +284,48 @@ servers:
 
 > [!WARNING]
 > Do not put secrets directly in `.ai/mcp.yaml`. Reference environment variables instead.
+
+### 🧩 Claude Code plugins
+
+Declare plugin marketplaces and the plugins to enable in `.ai/plugins.yaml`. The file is optional.
+
+```yaml
+marketplaces:
+  mattpocock:
+    repo: mattpocock/skills
+  ponytail:
+    repo: DietrichGebert/ponytail
+plugins:
+  mattpocock-skills@mattpocock: true
+  ponytail@ponytail: true
+env:
+  PONYTAIL_DEFAULT_MODE: "off"
+```
+
+Each plugin key is `<plugin>@<marketplace>`, the same form `claude plugin install` takes, and its value is the enabled flag. A marketplace takes `repo` for GitHub, `url` for a hosted manifest, or `path` for a local checkout. `source` is inferred from whichever one you set, so declare it explicitly only to override that.
+
+`env` becomes the `env` block of `.claude/settings.json`. Plugins that read their configuration from the environment, such as `PONYTAIL_DEFAULT_MODE`, are configured there.
+
+| 🧩 Canonical source | Claude | Codex | Kiro |
+| --- | --- | --- | --- |
+| `.ai/plugins.yaml` | `.claude/settings.json` | — | — |
+
+> [!IMPORTANT]
+> `ai-sync` owns all of `.claude/settings.json`, so it is the only place project-scoped plugins survive a sync. Installing with `claude plugin install --scope project` writes to that same file and the next sync overwrites it.
+
+Rendering `enabledPlugins` sets the enabled flag, but it does not put the plugin on disk. Claude Code loads a plugin from `~/.claude/plugins/installed_plugins.json`, which pins the installed version and commit and is global to the machine, so no file under `.ai/` can hold it. `ai-sync plugins` closes that gap by running the installs that `.ai/plugins.yaml` implies:
+
+```sh
+ai-sync            # writes .claude/settings.json
+ai-sync plugins    # claude plugin install <plugin>@<marketplace> --scope project --yes
+```
+
+```sh
+ai-sync plugins --dry-run          # print the commands without running them
+ai-sync plugins --scope user       # project (default), user, or local
+```
+
+Entries set to `false` are reported as skipped instead of installed. The install is recorded per machine and resolves across a repository's worktrees, so it is a one-time step, while `ai-sync` itself runs in every worktree.
 
 ### 🧰 Skills
 
