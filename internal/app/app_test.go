@@ -1,6 +1,7 @@
 package app_test
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -958,6 +959,8 @@ plugins:
 env:
   PONYTAIL_DEFAULT_MODE: "off"
 `)
+	t.Setenv("HOME", t.TempDir())
+	fakeClaudeOnPath(t, "exit 0")
 
 	if _, err := app.Run(dir, nil); err != nil {
 		t.Fatalf("sync should not return an error: %v", err)
@@ -1212,6 +1215,134 @@ func TestSyncRejectsInvalidSetupFile(t *testing.T) {
 			}
 			assertFileMissing(t, filepath.Join(dir, ".claude/settings.json"))
 		})
+	}
+}
+
+func fakeClaudeOnPath(t *testing.T, script string) {
+	t.Helper()
+	bin := t.TempDir()
+	path := filepath.Join(bin, "claude")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\n"+script+"\n"), 0o755); err != nil {
+		t.Fatalf("write fake claude: %v", err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+func seedInstalledPlugins(t *testing.T, home string, names ...string) {
+	t.Helper()
+	plugins := map[string][]map[string]string{}
+	for _, name := range names {
+		plugins[name] = []map[string]string{{"scope": "project"}}
+	}
+	data := map[string]any{"version": 2, "plugins": plugins}
+	contents, err := json.Marshal(data)
+	if err != nil {
+		t.Fatalf("marshal installed_plugins.json: %v", err)
+	}
+	dir := filepath.Join(home, ".claude", "plugins")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir installed_plugins.json dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "installed_plugins.json"), contents, 0o644); err != nil {
+		t.Fatalf("write installed_plugins.json: %v", err)
+	}
+}
+
+func TestPluginsContinuesAfterAFailedInstall(t *testing.T) {
+	dir := t.TempDir()
+	writeCanonicalSource(t, dir)
+	writeFile(t, dir, ".ai/plugins.yaml", `plugins:
+  fails@mp: true
+  succeeds@mp: true
+`)
+	fakeClaudeOnPath(t, `if [ "$3" = "fails@mp" ]; then echo boom >&2; exit 1; fi
+exit 0`)
+
+	out, err := app.Run(dir, []string{"plugins"})
+	if err == nil {
+		t.Fatalf("expected an error when one install fails")
+	}
+	if !strings.Contains(err.Error(), "fails@mp") {
+		t.Fatalf("expected error to mention the failing plugin, got %v", err)
+	}
+	if !strings.Contains(out, "failed fails@mp") {
+		t.Fatalf("expected output to report the failure, got %q", out)
+	}
+	if !strings.Contains(out, "installed succeeds@mp") {
+		t.Fatalf("expected output to still report the later plugin installed, got %q", out)
+	}
+}
+
+func TestSyncAutoInstallsDeclaredPlugins(t *testing.T) {
+	dir := t.TempDir()
+	writeCanonicalSource(t, dir)
+	writeFile(t, dir, ".ai/plugins.yaml", "plugins:\n  mattpocock-skills@mattpocock: true\n")
+	t.Setenv("HOME", t.TempDir())
+	fakeClaudeOnPath(t, "exit 0")
+
+	out, err := app.Run(dir, nil)
+	if err != nil {
+		t.Fatalf("sync should not return an error: %v", err)
+	}
+	if !strings.Contains(out, "installed mattpocock-skills@mattpocock") {
+		t.Fatalf("expected output to report the plugin installed, got %q", out)
+	}
+}
+
+func TestSyncSkipsPluginInstallWhenAlreadyInstalled(t *testing.T) {
+	dir := t.TempDir()
+	writeCanonicalSource(t, dir)
+	writeFile(t, dir, ".ai/plugins.yaml", "plugins:\n  mattpocock-skills@mattpocock: true\n")
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	seedInstalledPlugins(t, home, "mattpocock-skills@mattpocock")
+	t.Setenv("PATH", t.TempDir())
+
+	out, err := app.Run(dir, nil)
+	if err != nil {
+		t.Fatalf("sync should not return an error: %v", err)
+	}
+	if !strings.Contains(out, "ok mattpocock-skills@mattpocock") {
+		t.Fatalf("expected output to report the plugin already installed, got %q", out)
+	}
+	if strings.Contains(out, "installed mattpocock-skills@mattpocock") {
+		t.Fatalf("did not expect a real install, got %q", out)
+	}
+}
+
+func TestSyncSkipsPluginAutoInstallWhenClaudeMissing(t *testing.T) {
+	dir := t.TempDir()
+	writeCanonicalSource(t, dir)
+	writeFile(t, dir, ".ai/plugins.yaml", "plugins:\n  mattpocock-skills@mattpocock: true\n")
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("PATH", t.TempDir())
+
+	out, err := app.Run(dir, nil)
+	if err != nil {
+		t.Fatalf("sync should not return an error when claude is missing: %v", err)
+	}
+	if !strings.Contains(out, "skipped mattpocock-skills@mattpocock (claude not found in PATH)") {
+		t.Fatalf("expected output to report the skip, got %q", out)
+	}
+}
+
+func TestSyncAutoInstallDryRunDoesNotRunClaude(t *testing.T) {
+	dir := t.TempDir()
+	writeCanonicalSource(t, dir)
+	writeFile(t, dir, ".ai/plugins.yaml", "plugins:\n  mattpocock-skills@mattpocock: true\n")
+	t.Setenv("HOME", t.TempDir())
+	marker := filepath.Join(dir, "claude.marker")
+	fakeClaudeOnPath(t, fmt.Sprintf("touch %s\nexit 0", marker))
+
+	out, err := app.Run(dir, []string{"--dry-run"})
+	if err != nil {
+		t.Fatalf("dry run should not return an error: %v", err)
+	}
+	if !strings.Contains(out, "would run: claude plugin install mattpocock-skills@mattpocock --scope project --yes") {
+		t.Fatalf("expected output to report the pending install, got %q", out)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("expected dry run not to invoke claude")
 	}
 }
 

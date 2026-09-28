@@ -316,19 +316,22 @@ Each plugin key is `<plugin>@<marketplace>`, the same form `claude plugin instal
 > [!IMPORTANT]
 > `ai-sync` owns all of `.claude/settings.json`, so it is the only place project-scoped plugins survive a sync. Installing with `claude plugin install --scope project` writes to that same file and the next sync overwrites it.
 
-Rendering `enabledPlugins` sets the enabled flag, but it does not put the plugin on disk. Claude Code loads a plugin from `~/.claude/plugins/installed_plugins.json`, which pins the installed version and commit and is global to the machine, so no file under `.ai/` can hold it. `ai-sync plugins` closes that gap by running the installs that `.ai/plugins.yaml` implies:
+Rendering `enabledPlugins` sets the enabled flag, but it does not put the plugin on disk by itself. Claude Code loads a plugin from `~/.claude/plugins/installed_plugins.json`, which pins the installed version and commit and is global to the machine, so no file under `.ai/` can hold it.
+
+Plain `ai-sync` closes that gap on its own: after writing `.claude/settings.json`, it checks `~/.claude/plugins/installed_plugins.json` for each enabled entry and runs `claude plugin install <plugin>@<marketplace> --scope project --yes` for whichever ones are missing. The check is a local file read — no network, no `claude` invocation — so a steady-state sync where everything is already installed costs nothing extra. If `claude` isn't on `PATH` at all, the check is skipped silently rather than failing the sync (a machine that only uses `ai-sync` for Codex or Kiro output never needs Claude Code installed).
 
 ```sh
-ai-sync            # writes .claude/settings.json
-ai-sync plugins    # claude plugin install <plugin>@<marketplace> --scope project --yes
+ai-sync    # writes .claude/settings.json, then installs whatever it just enabled that isn't on disk yet
 ```
+
+Use the explicit `ai-sync plugins` command instead when you need something the automatic check does not do — a scope other than `project`, or forcing a reinstall/upgrade (the automatic check only asks "does this key exist at all," not "is it current"):
 
 ```sh
 ai-sync plugins --dry-run          # print the commands without running them
 ai-sync plugins --scope user       # project (default), user, or local
 ```
 
-Entries set to `false` are reported as skipped instead of installed. The install is recorded per machine and resolves across a repository's worktrees, so it is a one-time step, while `ai-sync` itself runs in every worktree.
+Entries set to `false` are reported as skipped instead of installed, in both the automatic check and the explicit command. A failed install no longer aborts the rest — every declared plugin gets attempted, and every failure is reported together at the end.
 
 ### 🪝 Hooks
 

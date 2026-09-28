@@ -106,6 +106,16 @@ func RunWithBuildInfo(workdir string, args []string, build BuildInfo) (string, e
 		return strings.Join(changes, "\n") + "\n", err
 	}
 
+	plugins, err := loadPlugins(filepath.Join(workdir, ".ai", "plugins.yaml"))
+	if err != nil {
+		return "", err
+	}
+	pluginChanges, err := runPluginInstalls(workdir, plugins, "project", true, false, opts.dryRun)
+	changes = append(changes, pluginChanges...)
+	if err != nil {
+		return strings.Join(changes, "\n") + "\n", err
+	}
+
 	if len(changes) == 0 {
 		return "no changes\n", nil
 	}
@@ -143,35 +153,8 @@ func installPlugins(workdir string, args []string) (string, error) {
 		return "no plugins declared in .ai/plugins.yaml\n", nil
 	}
 
-	var claudePath string
-	if !opts.dryRun {
-		claudePath, err = exec.LookPath("claude")
-		if err != nil {
-			return "", errors.New("claude not found in PATH; the Claude Code CLI installs the plugins that .ai/plugins.yaml declares")
-		}
-	}
-
-	var changes []string
-	for _, name := range sortedStringMapKeys(config.Plugins) {
-		if !config.Plugins[name] {
-			changes = append(changes, "skipped "+name+" (disabled in .ai/plugins.yaml)")
-			continue
-		}
-		installArgs := []string{"plugin", "install", name, "--scope", opts.scope, "--yes"}
-		if opts.dryRun {
-			changes = append(changes, "would run: claude "+strings.Join(installArgs, " "))
-			continue
-		}
-		command := exec.Command(claudePath, installArgs...)
-		command.Dir = workdir
-		output, err := command.CombinedOutput()
-		if err != nil {
-			changes = append(changes, "failed "+name)
-			return strings.Join(changes, "\n") + "\n", fmt.Errorf("claude plugin install %s: %w\n%s", name, err, strings.TrimSpace(string(output)))
-		}
-		changes = append(changes, "installed "+name)
-	}
-	return strings.Join(changes, "\n") + "\n", nil
+	changes, err := runPluginInstalls(workdir, config, opts.scope, false, true, opts.dryRun)
+	return strings.Join(changes, "\n") + "\n", err
 }
 
 func cleanGeneratedFiles(workdir string, args []string) (string, error) {
@@ -481,7 +464,7 @@ Use .ai/ as the single source of truth for AI-agent configuration. Do not create
 - Put agent-specific overrides in .ai/targets/<target>.md.
 - Put path-scoped guidance in .ai/rules/<name>.md with a paths list in YAML frontmatter. ai-sync maps these rules to native Claude Code .claude/rules files, native Kiro fileMatch steering files, and nested Codex AGENTS.md files.
 - Put reusable workflows in .ai/skills/<name>/SKILL.md.
-- Declare Claude Code plugin marketplaces and plugins in .ai/plugins.yaml. Only the Claude target reads this file. Run ai-sync plugins after the sync; declaring a plugin enables it, but the Claude Code CLI is what installs it.
+- Declare Claude Code plugin marketplaces and plugins in .ai/plugins.yaml. Only the Claude target reads this file. Plain ai-sync installs enabled plugins automatically at scope project (skipped if claude is not on PATH); use ai-sync plugins for a different scope or to force a reinstall.
 - Declare Claude Code hooks in .ai/hooks.yaml. Only the Claude target reads this file.
 - Declare per-machine bootstrap commands in .ai/setup.yaml. check must be cheap; it runs on every sync. install only runs when check fails.
 - Keep secrets out of .ai/mcp.yaml, .ai/plugins.yaml, .ai/hooks.yaml, and .ai/setup.yaml; use environment variables.
@@ -773,6 +756,77 @@ func loadPlugins(path string) (pluginConfig, error) {
 	return config, nil
 }
 
+func isPluginInstalled(name string) bool {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return false
+	}
+	contents, err := os.ReadFile(filepath.Join(home, ".claude", "plugins", "installed_plugins.json"))
+	if err != nil {
+		return false
+	}
+	var installed struct {
+		Plugins map[string][]json.RawMessage `json:"plugins"`
+	}
+	if err := json.Unmarshal(contents, &installed); err != nil {
+		return false
+	}
+	return len(installed.Plugins[name]) > 0
+}
+
+func runPluginInstalls(workdir string, config pluginConfig, scope string, checkInstalled bool, requireClaude bool, dryRun bool) ([]string, error) {
+	if len(config.Plugins) == 0 {
+		return nil, nil
+	}
+
+	var claudePath string
+	var claudeErr error
+	var claudeChecked bool
+	resolveClaude := func() (string, error) {
+		if !claudeChecked {
+			claudeChecked = true
+			claudePath, claudeErr = exec.LookPath("claude")
+		}
+		return claudePath, claudeErr
+	}
+
+	var changes []string
+	var errs []error
+	for _, name := range sortedStringMapKeys(config.Plugins) {
+		if !config.Plugins[name] {
+			changes = append(changes, "skipped "+name+" (disabled in .ai/plugins.yaml)")
+			continue
+		}
+		if checkInstalled && isPluginInstalled(name) {
+			changes = append(changes, "ok "+name)
+			continue
+		}
+		installArgs := []string{"plugin", "install", name, "--scope", scope, "--yes"}
+		if dryRun {
+			changes = append(changes, "would run: claude "+strings.Join(installArgs, " "))
+			continue
+		}
+		claudePath, err := resolveClaude()
+		if err != nil {
+			if requireClaude {
+				return changes, errors.New("claude not found in PATH; the Claude Code CLI installs the plugins that .ai/plugins.yaml declares")
+			}
+			changes = append(changes, "skipped "+name+" (claude not found in PATH)")
+			continue
+		}
+		command := exec.Command(claudePath, installArgs...)
+		command.Dir = workdir
+		output, err := command.CombinedOutput()
+		if err != nil {
+			errs = append(errs, fmt.Errorf("claude plugin install %s: %w\n%s", name, err, strings.TrimSpace(string(output))))
+			changes = append(changes, "failed "+name)
+			continue
+		}
+		changes = append(changes, "installed "+name)
+	}
+	return changes, errors.Join(errs...)
+}
+
 func validateMarketplace(name string, marketplace marketplaceSource) error {
 	switch resolveMarketplaceSource(marketplace) {
 	case "github":
@@ -878,6 +932,7 @@ func loadSetup(path string) (setupConfig, error) {
 
 func runSetup(workdir string, config setupConfig, dryRun bool) ([]string, error) {
 	var changes []string
+	var errs []error
 	for _, name := range sortedStringMapKeys(config) {
 		entry := config[name]
 
@@ -897,11 +952,13 @@ func runSetup(workdir string, config setupConfig, dryRun bool) ([]string, error)
 		install.Dir = workdir
 		output, err := install.CombinedOutput()
 		if err != nil {
-			return changes, fmt.Errorf("setup %s: %w\n%s", name, err, strings.TrimSpace(string(output)))
+			errs = append(errs, fmt.Errorf("setup %s: %w\n%s", name, err, strings.TrimSpace(string(output))))
+			changes = append(changes, "failed "+name)
+			continue
 		}
 		changes = append(changes, "installed "+name)
 	}
-	return changes, nil
+	return changes, errors.Join(errs...)
 }
 
 func loadSkills(root string) ([]skill, error) {
