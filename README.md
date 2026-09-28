@@ -145,6 +145,7 @@ You edit this:
   project.md
   mcp.yaml
   plugins.yaml
+  hooks.yaml
   targets/
     claude.md
     codex.md
@@ -177,6 +178,7 @@ Kiro         -> .kiro/steering/, .kiro/settings/mcp.json, .kiro/powers/, .kiro/s
 | `.ai/rules/<name>.md` | `.claude/rules/<name>.md` with `paths` frontmatter | nested `<scope>/AGENTS.md` files, or root `AGENTS.md` when no narrower directory exists | `.kiro/steering/<name>.md` with `inclusion: fileMatch` |
 | `.ai/mcp.yaml` | `.mcp.json` | `.codex/config.toml` | `.kiro/settings/mcp.json` |
 | `.ai/plugins.yaml` | `.claude/settings.json` (`extraKnownMarketplaces`, `enabledPlugins`, `env`) | — | — |
+| `.ai/hooks.yaml` | `.claude/settings.json` (`hooks`) | — | — |
 | `.ai/skills/<name>/SKILL.md` | `.claude/skills/<name>/SKILL.md` | `.agents/skills/<name>/SKILL.md` | `.kiro/skills/<name>/SKILL.md` and `.kiro/powers/<name>/POWER.md` |
 | extra files under `.ai/skills/<name>/` | copied under `.claude/skills/<name>/` | copied under `.agents/skills/<name>/` | copied under `.kiro/skills/<name>/` and `.kiro/powers/<name>/` |
 
@@ -326,6 +328,39 @@ ai-sync plugins --scope user       # project (default), user, or local
 ```
 
 Entries set to `false` are reported as skipped instead of installed. The install is recorded per machine and resolves across a repository's worktrees, so it is a one-time step, while `ai-sync` itself runs in every worktree.
+
+### 🪝 Hooks
+
+Declare Claude Code hooks in `.ai/hooks.yaml`. The file is optional and only the Claude target reads it. The shape matches Claude Code's native `hooks` block in `.claude/settings.json` directly — a map from event name to a list of matchers, each with one or more commands:
+
+```yaml
+SessionStart:
+  - hooks:
+      - type: command
+        command: "code-review-graph status || true"
+PostEdit:
+  - matcher: "Write|Edit"
+    hooks:
+      - type: command
+        command: "code-review-graph update 2>/dev/null || true"
+PostGit:
+  - matcher: "commit"
+    hooks:
+      - type: command
+        command: "code-review-graph update 2>/dev/null || true"
+```
+
+This is how a tool that used to ship as a plugin, or that self-installs by writing straight into `.claude/settings.json`, gets absorbed back into the canonical source: write down the hooks it needs once in `.ai/hooks.yaml`, and `ai-sync` regenerates them on every sync instead of a one-off installer script owning that part of the file.
+
+| 🧩 Canonical source | Claude | Codex | Kiro |
+| --- | --- | --- | --- |
+| `.ai/hooks.yaml` | `.claude/settings.json` | — | — |
+
+> [!WARNING]
+> Do not put secrets directly in `.ai/hooks.yaml`. Reference environment variables instead.
+
+> [!IMPORTANT]
+> Same rule as plugins: `ai-sync` owns all of `.claude/settings.json`. A hook written there by an external installer does not survive the next sync unless it is also declared in `.ai/hooks.yaml`.
 
 ### 🧰 Skills
 

@@ -432,6 +432,7 @@ Use .ai/ as the single source of truth for AI-agent configuration. Do not create
   project.md
   mcp.yaml
   plugins.yaml
+  hooks.yaml
   targets/
     claude.md
     codex.md
@@ -453,6 +454,7 @@ Use .ai/ as the single source of truth for AI-agent configuration. Do not create
 | .ai/project.md | Shared project rules, architecture, commands, conventions, and review expectations. |
 | .ai/mcp.yaml | Shared MCP server definitions. Reference environment variables instead of hardcoding secrets. |
 | .ai/plugins.yaml | Optional Claude Code plugin marketplaces, the plugins to enable, and the environment variables those plugins read. |
+| .ai/hooks.yaml | Optional Claude Code hooks (event name to matcher and command). |
 | .ai/targets/claude.md | Claude Code-specific guidance only. |
 | .ai/targets/codex.md | Codex-specific guidance only. |
 | .ai/targets/kiro.md | Kiro-specific guidance only. |
@@ -466,12 +468,13 @@ Use .ai/ as the single source of truth for AI-agent configuration. Do not create
 - Put path-scoped guidance in .ai/rules/<name>.md with a paths list in YAML frontmatter. ai-sync maps these rules to native Claude Code .claude/rules files, native Kiro fileMatch steering files, and nested Codex AGENTS.md files.
 - Put reusable workflows in .ai/skills/<name>/SKILL.md.
 - Declare Claude Code plugin marketplaces and plugins in .ai/plugins.yaml. Only the Claude target reads this file. Run ai-sync plugins after the sync; declaring a plugin enables it, but the Claude Code CLI is what installs it.
-- Keep secrets out of .ai/mcp.yaml and .ai/plugins.yaml; use environment variables.
+- Declare Claude Code hooks in .ai/hooks.yaml. Only the Claude target reads this file.
+- Keep secrets out of .ai/mcp.yaml, .ai/plugins.yaml, and .ai/hooks.yaml; use environment variables.
 - Do not create generated agent files directly. Run ai-sync after creating or editing .ai/.
 
 ## Suggested prompt for an AI agent
 
-Create the .ai/ directory using the ai-sync convention. Add shared project guidance to .ai/project.md, define MCP servers in .ai/mcp.yaml, declare Claude Code plugins in .ai/plugins.yaml, put agent-specific instructions under .ai/targets/, add path-scoped guidance under .ai/rules/<name>.md, and add reusable workflows under .ai/skills/<name>/SKILL.md. Do not create CLAUDE.md, AGENTS.md, .codex/config.toml, .mcp.json, or .kiro/settings/mcp.json directly.
+Create the .ai/ directory using the ai-sync convention. Add shared project guidance to .ai/project.md, define MCP servers in .ai/mcp.yaml, declare Claude Code plugins in .ai/plugins.yaml, declare Claude Code hooks in .ai/hooks.yaml, put agent-specific instructions under .ai/targets/, add path-scoped guidance under .ai/rules/<name>.md, and add reusable workflows under .ai/skills/<name>/SKILL.md. Do not create CLAUDE.md, AGENTS.md, .codex/config.toml, .mcp.json, or .kiro/settings/mcp.json directly.
 `
 }
 
@@ -488,6 +491,7 @@ type source struct {
 	Rules   []pathRule
 	MCP     mcpConfig
 	Plugins pluginConfig
+	Hooks   hooksConfig
 	Skills  []skill
 }
 
@@ -512,6 +516,18 @@ type marketplaceSource struct {
 	Repo   string `yaml:"repo"`
 	URL    string `yaml:"url"`
 	Path   string `yaml:"path"`
+}
+
+type hooksConfig map[string][]hookMatcher
+
+type hookMatcher struct {
+	Matcher string      `yaml:"matcher,omitempty" json:"matcher,omitempty"`
+	Hooks   []hookEntry `yaml:"hooks" json:"hooks"`
+}
+
+type hookEntry struct {
+	Type    string `yaml:"type" json:"type"`
+	Command string `yaml:"command" json:"command"`
 }
 
 type pathRule struct {
@@ -539,6 +555,7 @@ func initSource(workdir string) (string, error) {
 		{Path: ".ai/project.md", Content: []byte("# Project\n\nDescribe shared stack, commands, conventions, and review expectations here.\n")},
 		{Path: ".ai/mcp.yaml", Content: []byte("servers: {}\n")},
 		{Path: ".ai/plugins.yaml", Content: []byte("marketplaces: {}\nplugins: {}\n")},
+		{Path: ".ai/hooks.yaml", Content: []byte("{}\n")},
 		{Path: ".ai/targets/claude.md", Content: []byte("# Claude Code\n\nAdd Claude-specific guidance here.\n")},
 		{Path: ".ai/targets/codex.md", Content: []byte("# Codex\n\nAdd Codex-specific guidance here.\n")},
 		{Path: ".ai/targets/kiro.md", Content: []byte("# Kiro\n\nAdd Kiro-specific guidance here.\n")},
@@ -586,6 +603,11 @@ func loadSource(workdir string) (source, error) {
 		return source{}, err
 	}
 
+	hooks, err := loadHooks(filepath.Join(root, "hooks.yaml"))
+	if err != nil {
+		return source{}, err
+	}
+
 	targets := make(map[string]string, len(allTargets))
 	for _, target := range allTargets {
 		path := filepath.Join(root, "targets", target+".md")
@@ -606,7 +628,7 @@ func loadSource(workdir string) (source, error) {
 		return source{}, err
 	}
 
-	return source{Project: project, Targets: targets, Rules: rules, MCP: mcp, Plugins: plugins, Skills: skills}, nil
+	return source{Project: project, Targets: targets, Rules: rules, MCP: mcp, Plugins: plugins, Hooks: hooks, Skills: skills}, nil
 }
 
 func readRequiredText(path string) (string, error) {
@@ -772,6 +794,42 @@ func validatePluginKey(key string) error {
 	return nil
 }
 
+func loadHooks(path string) (hooksConfig, error) {
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return hooksConfig{}, nil
+		}
+		return nil, fmt.Errorf("read .ai/hooks.yaml: %w", err)
+	}
+
+	var config hooksConfig
+	if err := yaml.Unmarshal(contents, &config); err != nil {
+		return nil, fmt.Errorf("parse .ai/hooks.yaml: %w", err)
+	}
+
+	for _, event := range sortedStringMapKeys(config) {
+		for i, matcher := range config[event] {
+			if err := validateHookMatcher(event, i, matcher); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return config, nil
+}
+
+func validateHookMatcher(event string, index int, matcher hookMatcher) error {
+	if len(matcher.Hooks) == 0 {
+		return fmt.Errorf(".ai/hooks.yaml event %q entry %d: needs at least one hook", event, index)
+	}
+	for j, entry := range matcher.Hooks {
+		if entry.Type == "" || entry.Command == "" {
+			return fmt.Errorf(".ai/hooks.yaml event %q entry %d hook %d: needs a type and a command", event, index, j)
+		}
+	}
+	return nil
+}
+
 func loadSkills(root string) ([]skill, error) {
 	entries, err := os.ReadDir(root)
 	if err != nil {
@@ -865,7 +923,7 @@ func renderTarget(target string, source source) ([]generatedFile, error) {
 func renderClaude(source source) ([]generatedFile, error) {
 	files := []generatedFile{
 		{Path: "CLAUDE.md", Content: renderGuidance("Claude Code", source.Project, source.Targets["claude"], nil)},
-		{Path: ".claude/settings.json", Content: renderClaudeSettings(source.Plugins)},
+		{Path: ".claude/settings.json", Content: renderClaudeSettings(source.Plugins, source.Hooks)},
 		{Path: ".mcp.json", Content: mustJSON(map[string]any{"mcpServers": mcpServersJSON(source.MCP)})},
 	}
 	for _, rule := range source.Rules {
@@ -875,8 +933,11 @@ func renderClaude(source source) ([]generatedFile, error) {
 	return files, nil
 }
 
-func renderClaudeSettings(config pluginConfig) []byte {
+func renderClaudeSettings(config pluginConfig, hooks hooksConfig) []byte {
 	settings := map[string]any{"permissions": map[string]any{}}
+	if len(hooks) > 0 {
+		settings["hooks"] = hooks
+	}
 	if len(config.Marketplaces) > 0 {
 		marketplaces := map[string]any{}
 		for _, name := range sortedStringMapKeys(config.Marketplaces) {

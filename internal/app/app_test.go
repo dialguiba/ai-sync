@@ -98,6 +98,7 @@ func TestInitCreatesCanonicalSource(t *testing.T) {
 		".ai/targets/codex.md",
 		".ai/targets/kiro.md",
 		".ai/plugins.yaml",
+		".ai/hooks.yaml",
 		".ai/rules/example.md",
 		".ai/skills/example/SKILL.md",
 	} {
@@ -1016,6 +1017,81 @@ func TestSyncRejectsInvalidPluginsFile(t *testing.T) {
 			dir := t.TempDir()
 			writeCanonicalSource(t, dir)
 			writeFile(t, dir, ".ai/plugins.yaml", testCase.contents)
+
+			_, err := app.Run(dir, nil)
+			if err == nil {
+				t.Fatalf("expected an error for %s", name)
+			}
+			if !strings.Contains(err.Error(), testCase.want) {
+				t.Fatalf("expected error to contain %q, got %q", testCase.want, err.Error())
+			}
+			assertFileMissing(t, filepath.Join(dir, ".claude/settings.json"))
+		})
+	}
+}
+
+func TestSyncRendersHooksIntoClaudeSettings(t *testing.T) {
+	dir := t.TempDir()
+	writeCanonicalSource(t, dir)
+	writeFile(t, dir, ".ai/hooks.yaml", `PostEdit:
+  - matcher: "Write|Edit"
+    hooks:
+      - type: command
+        command: "code-review-graph update 2>/dev/null || true"
+`)
+
+	if _, err := app.Run(dir, nil); err != nil {
+		t.Fatalf("sync should not return an error: %v", err)
+	}
+
+	settings := filepath.Join(dir, ".claude/settings.json")
+	assertFileContainsInOrder(t, settings, []string{
+		`"hooks"`,
+		`"PostEdit"`,
+		`"matcher": "Write|Edit"`,
+		`"type": "command"`,
+		`"command": "code-review-graph update 2\u003e/dev/null || true"`,
+		`"permissions"`,
+	})
+
+	assertFileNotContains(t, filepath.Join(dir, ".codex/config.toml"), "code-review-graph")
+}
+
+func TestSyncKeepsClaudeSettingsMinimalWithoutHooksFile(t *testing.T) {
+	dir := t.TempDir()
+	writeCanonicalSource(t, dir)
+
+	if _, err := app.Run(dir, nil); err != nil {
+		t.Fatalf("sync should not return an error: %v", err)
+	}
+
+	settings := filepath.Join(dir, ".claude/settings.json")
+	assertFileContains(t, settings, `"permissions"`)
+	assertFileNotContains(t, settings, "hooks")
+}
+
+func TestSyncRejectsInvalidHooksFile(t *testing.T) {
+	for name, testCase := range map[string]struct {
+		contents string
+		want     string
+	}{
+		"matcher without hooks": {
+			contents: "PostEdit:\n  - matcher: \"Write|Edit\"\n",
+			want:     "needs at least one hook",
+		},
+		"hook entry missing command": {
+			contents: "SessionStart:\n  - hooks:\n      - type: command\n",
+			want:     "needs a type and a command",
+		},
+		"malformed yaml": {
+			contents: "PostEdit: [\n",
+			want:     "parse .ai/hooks.yaml",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeCanonicalSource(t, dir)
+			writeFile(t, dir, ".ai/hooks.yaml", testCase.contents)
 
 			_, err := app.Run(dir, nil)
 			if err == nil {
