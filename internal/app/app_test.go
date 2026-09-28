@@ -1,6 +1,7 @@
 package app_test
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -99,6 +100,7 @@ func TestInitCreatesCanonicalSource(t *testing.T) {
 		".ai/targets/kiro.md",
 		".ai/plugins.yaml",
 		".ai/hooks.yaml",
+		".ai/setup.yaml",
 		".ai/rules/example.md",
 		".ai/skills/example/SKILL.md",
 	} {
@@ -1092,6 +1094,114 @@ func TestSyncRejectsInvalidHooksFile(t *testing.T) {
 			dir := t.TempDir()
 			writeCanonicalSource(t, dir)
 			writeFile(t, dir, ".ai/hooks.yaml", testCase.contents)
+
+			_, err := app.Run(dir, nil)
+			if err == nil {
+				t.Fatalf("expected an error for %s", name)
+			}
+			if !strings.Contains(err.Error(), testCase.want) {
+				t.Fatalf("expected error to contain %q, got %q", testCase.want, err.Error())
+			}
+			assertFileMissing(t, filepath.Join(dir, ".claude/settings.json"))
+		})
+	}
+}
+
+func TestSyncSkipsInstallWhenSetupCheckPasses(t *testing.T) {
+	dir := t.TempDir()
+	writeCanonicalSource(t, dir)
+	writeFile(t, dir, ".ai/setup.yaml", `code-review-graph:
+  check: "true"
+  install: "exit 1"
+`)
+
+	out, err := app.Run(dir, nil)
+	if err != nil {
+		t.Fatalf("sync should not return an error: %v", err)
+	}
+	if !strings.Contains(out, "ok code-review-graph") {
+		t.Fatalf("expected output to report the check passed, got %q", out)
+	}
+}
+
+func TestSyncRunsInstallWhenSetupCheckFails(t *testing.T) {
+	dir := t.TempDir()
+	writeCanonicalSource(t, dir)
+	writeFile(t, dir, ".ai/setup.yaml", `code-review-graph:
+  check: "false"
+  install: "true"
+`)
+
+	out, err := app.Run(dir, nil)
+	if err != nil {
+		t.Fatalf("sync should not return an error: %v", err)
+	}
+	if !strings.Contains(out, "installed code-review-graph") {
+		t.Fatalf("expected output to report the install ran, got %q", out)
+	}
+}
+
+func TestSyncDryRunDoesNotRunSetupInstall(t *testing.T) {
+	dir := t.TempDir()
+	writeCanonicalSource(t, dir)
+	marker := filepath.Join(dir, "installed.marker")
+	writeFile(t, dir, ".ai/setup.yaml", fmt.Sprintf(`code-review-graph:
+  check: "false"
+  install: "touch %s"
+`, marker))
+
+	out, err := app.Run(dir, []string{"--dry-run"})
+	if err != nil {
+		t.Fatalf("dry run should not return an error: %v", err)
+	}
+	if !strings.Contains(out, "would install code-review-graph") {
+		t.Fatalf("expected output to report the pending install, got %q", out)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("expected dry run not to execute the install command")
+	}
+}
+
+func TestSyncFailsWhenSetupInstallFails(t *testing.T) {
+	dir := t.TempDir()
+	writeCanonicalSource(t, dir)
+	writeFile(t, dir, ".ai/setup.yaml", `code-review-graph:
+  check: "false"
+  install: "exit 1"
+`)
+
+	_, err := app.Run(dir, nil)
+	if err == nil {
+		t.Fatalf("expected an error when the install command fails")
+	}
+	if !strings.Contains(err.Error(), "setup code-review-graph") {
+		t.Fatalf("expected error to name the failing setup entry, got %q", err.Error())
+	}
+	assertFileExists(t, filepath.Join(dir, ".claude/settings.json"))
+}
+
+func TestSyncRejectsInvalidSetupFile(t *testing.T) {
+	for name, testCase := range map[string]struct {
+		contents string
+		want     string
+	}{
+		"entry missing check": {
+			contents: "code-review-graph:\n  install: \"pip install code-review-graph\"\n",
+			want:     "needs a check and an install command",
+		},
+		"entry missing install": {
+			contents: "code-review-graph:\n  check: \"command -v code-review-graph\"\n",
+			want:     "needs a check and an install command",
+		},
+		"malformed yaml": {
+			contents: "code-review-graph: [\n",
+			want:     "parse .ai/setup.yaml",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeCanonicalSource(t, dir)
+			writeFile(t, dir, ".ai/setup.yaml", testCase.contents)
 
 			_, err := app.Run(dir, nil)
 			if err == nil {

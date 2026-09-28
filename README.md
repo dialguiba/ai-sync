@@ -179,6 +179,7 @@ Kiro         -> .kiro/steering/, .kiro/settings/mcp.json, .kiro/powers/, .kiro/s
 | `.ai/mcp.yaml` | `.mcp.json` | `.codex/config.toml` | `.kiro/settings/mcp.json` |
 | `.ai/plugins.yaml` | `.claude/settings.json` (`extraKnownMarketplaces`, `enabledPlugins`, `env`) | — | — |
 | `.ai/hooks.yaml` | `.claude/settings.json` (`hooks`) | — | — |
+| `.ai/setup.yaml` | executed directly on every sync, regardless of `--target` (see "Setup scripts" below) | executed directly | executed directly |
 | `.ai/skills/<name>/SKILL.md` | `.claude/skills/<name>/SKILL.md` | `.agents/skills/<name>/SKILL.md` | `.kiro/skills/<name>/SKILL.md` and `.kiro/powers/<name>/POWER.md` |
 | extra files under `.ai/skills/<name>/` | copied under `.claude/skills/<name>/` | copied under `.agents/skills/<name>/` | copied under `.kiro/skills/<name>/` and `.kiro/powers/<name>/` |
 
@@ -361,6 +362,25 @@ This is how a tool that used to ship as a plugin, or that self-installs by writi
 
 > [!IMPORTANT]
 > Same rule as plugins: `ai-sync` owns all of `.claude/settings.json`. A hook written there by an external installer does not survive the next sync unless it is also declared in `.ai/hooks.yaml`.
+
+### ⚙️ Setup scripts
+
+Declare per-machine bootstrap commands in `.ai/setup.yaml`. Unlike `.ai/plugins.yaml` (which only takes effect via the separate, opt-in `ai-sync plugins` command), every entry here runs on every plain `ai-sync` invocation — there is no separate command to remember:
+
+```yaml
+code-review-graph:
+  check: "command -v code-review-graph"
+  install: "pip install code-review-graph"
+```
+
+For each entry, `ai-sync` runs `check` first. If it exits `0`, the entry is already satisfied and `install` never runs. If it exits non-zero, `ai-sync` runs `install`. `check` must be cheap — it runs unconditionally on every sync, so a slow check makes every sync slow. `install` only pays its cost once, the first time a machine is missing the tool.
+
+This is how a tool that used to self-install by writing into agent config directly, or that requires a manual one-time `pip install` a teammate would otherwise have no way to discover, gets folded back into `ai-sync`: write the check/install pair once, commit it, and every clone of the repo bootstraps itself on the next sync.
+
+> [!WARNING]
+> `check` and `install` are shell commands (`sh -c`) declared in a file that ships with the repo. Review changes to `.ai/setup.yaml` in code review exactly as you would review any other script — a bad entry runs on every teammate's machine on their next `ai-sync`.
+
+`--dry-run` reports `would install <name>` instead of running `install`. A failing `install` stops the run and returns a non-zero exit, but files already generated earlier in the same `ai-sync` run stay on disk.
 
 ### 🧰 Skills
 

@@ -80,6 +80,11 @@ func RunWithBuildInfo(workdir string, args []string, build BuildInfo) (string, e
 		return "", err
 	}
 
+	setup, err := loadSetup(filepath.Join(workdir, ".ai", "setup.yaml"))
+	if err != nil {
+		return "", err
+	}
+
 	targets, err := selectedTargets(opts.target)
 	if err != nil {
 		return "", err
@@ -94,6 +99,13 @@ func RunWithBuildInfo(workdir string, args []string, build BuildInfo) (string, e
 		return "", err
 	}
 	changes = append(changes, written...)
+
+	setupChanges, err := runSetup(workdir, setup, opts.dryRun)
+	changes = append(changes, setupChanges...)
+	if err != nil {
+		return strings.Join(changes, "\n") + "\n", err
+	}
+
 	if len(changes) == 0 {
 		return "no changes\n", nil
 	}
@@ -433,6 +445,7 @@ Use .ai/ as the single source of truth for AI-agent configuration. Do not create
   mcp.yaml
   plugins.yaml
   hooks.yaml
+  setup.yaml
   targets/
     claude.md
     codex.md
@@ -455,6 +468,7 @@ Use .ai/ as the single source of truth for AI-agent configuration. Do not create
 | .ai/mcp.yaml | Shared MCP server definitions. Reference environment variables instead of hardcoding secrets. |
 | .ai/plugins.yaml | Optional Claude Code plugin marketplaces, the plugins to enable, and the environment variables those plugins read. |
 | .ai/hooks.yaml | Optional Claude Code hooks (event name to matcher and command). |
+| .ai/setup.yaml | Optional per-machine bootstrap commands (name to check and install). Runs on every ai-sync. |
 | .ai/targets/claude.md | Claude Code-specific guidance only. |
 | .ai/targets/codex.md | Codex-specific guidance only. |
 | .ai/targets/kiro.md | Kiro-specific guidance only. |
@@ -469,12 +483,13 @@ Use .ai/ as the single source of truth for AI-agent configuration. Do not create
 - Put reusable workflows in .ai/skills/<name>/SKILL.md.
 - Declare Claude Code plugin marketplaces and plugins in .ai/plugins.yaml. Only the Claude target reads this file. Run ai-sync plugins after the sync; declaring a plugin enables it, but the Claude Code CLI is what installs it.
 - Declare Claude Code hooks in .ai/hooks.yaml. Only the Claude target reads this file.
-- Keep secrets out of .ai/mcp.yaml, .ai/plugins.yaml, and .ai/hooks.yaml; use environment variables.
+- Declare per-machine bootstrap commands in .ai/setup.yaml. check must be cheap; it runs on every sync. install only runs when check fails.
+- Keep secrets out of .ai/mcp.yaml, .ai/plugins.yaml, .ai/hooks.yaml, and .ai/setup.yaml; use environment variables.
 - Do not create generated agent files directly. Run ai-sync after creating or editing .ai/.
 
 ## Suggested prompt for an AI agent
 
-Create the .ai/ directory using the ai-sync convention. Add shared project guidance to .ai/project.md, define MCP servers in .ai/mcp.yaml, declare Claude Code plugins in .ai/plugins.yaml, declare Claude Code hooks in .ai/hooks.yaml, put agent-specific instructions under .ai/targets/, add path-scoped guidance under .ai/rules/<name>.md, and add reusable workflows under .ai/skills/<name>/SKILL.md. Do not create CLAUDE.md, AGENTS.md, .codex/config.toml, .mcp.json, or .kiro/settings/mcp.json directly.
+Create the .ai/ directory using the ai-sync convention. Add shared project guidance to .ai/project.md, define MCP servers in .ai/mcp.yaml, declare Claude Code plugins in .ai/plugins.yaml, declare Claude Code hooks in .ai/hooks.yaml, declare per-machine bootstrap commands in .ai/setup.yaml, put agent-specific instructions under .ai/targets/, add path-scoped guidance under .ai/rules/<name>.md, and add reusable workflows under .ai/skills/<name>/SKILL.md. Do not create CLAUDE.md, AGENTS.md, .codex/config.toml, .mcp.json, or .kiro/settings/mcp.json directly.
 `
 }
 
@@ -530,6 +545,13 @@ type hookEntry struct {
 	Command string `yaml:"command" json:"command"`
 }
 
+type setupConfig map[string]setupEntry
+
+type setupEntry struct {
+	Check   string `yaml:"check"`
+	Install string `yaml:"install"`
+}
+
 type pathRule struct {
 	Name    string
 	Paths   []string
@@ -556,6 +578,7 @@ func initSource(workdir string) (string, error) {
 		{Path: ".ai/mcp.yaml", Content: []byte("servers: {}\n")},
 		{Path: ".ai/plugins.yaml", Content: []byte("marketplaces: {}\nplugins: {}\n")},
 		{Path: ".ai/hooks.yaml", Content: []byte("{}\n")},
+		{Path: ".ai/setup.yaml", Content: []byte("{}\n")},
 		{Path: ".ai/targets/claude.md", Content: []byte("# Claude Code\n\nAdd Claude-specific guidance here.\n")},
 		{Path: ".ai/targets/codex.md", Content: []byte("# Codex\n\nAdd Codex-specific guidance here.\n")},
 		{Path: ".ai/targets/kiro.md", Content: []byte("# Kiro\n\nAdd Kiro-specific guidance here.\n")},
@@ -828,6 +851,57 @@ func validateHookMatcher(event string, index int, matcher hookMatcher) error {
 		}
 	}
 	return nil
+}
+
+func loadSetup(path string) (setupConfig, error) {
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return setupConfig{}, nil
+		}
+		return nil, fmt.Errorf("read .ai/setup.yaml: %w", err)
+	}
+
+	var config setupConfig
+	if err := yaml.Unmarshal(contents, &config); err != nil {
+		return nil, fmt.Errorf("parse .ai/setup.yaml: %w", err)
+	}
+
+	for _, name := range sortedStringMapKeys(config) {
+		entry := config[name]
+		if entry.Check == "" || entry.Install == "" {
+			return nil, fmt.Errorf(".ai/setup.yaml entry %q: needs a check and an install command", name)
+		}
+	}
+	return config, nil
+}
+
+func runSetup(workdir string, config setupConfig, dryRun bool) ([]string, error) {
+	var changes []string
+	for _, name := range sortedStringMapKeys(config) {
+		entry := config[name]
+
+		check := exec.Command("sh", "-c", entry.Check)
+		check.Dir = workdir
+		if err := check.Run(); err == nil {
+			changes = append(changes, "ok "+name)
+			continue
+		}
+
+		if dryRun {
+			changes = append(changes, "would install "+name)
+			continue
+		}
+
+		install := exec.Command("sh", "-c", entry.Install)
+		install.Dir = workdir
+		output, err := install.CombinedOutput()
+		if err != nil {
+			return changes, fmt.Errorf("setup %s: %w\n%s", name, err, strings.TrimSpace(string(output)))
+		}
+		changes = append(changes, "installed "+name)
+	}
+	return changes, nil
 }
 
 func loadSkills(root string) ([]skill, error) {
