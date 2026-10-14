@@ -435,6 +435,8 @@ Use .ai/ as the single source of truth for AI-agent configuration. Do not create
     kiro.md
   rules/
     <name>.md
+  agents/
+    <name>.md
   skills/
     <name>/
       SKILL.md
@@ -456,6 +458,7 @@ Use .ai/ as the single source of truth for AI-agent configuration. Do not create
 | .ai/targets/codex.md | Codex-specific guidance only. |
 | .ai/targets/kiro.md | Kiro-specific guidance only. |
 | .ai/rules/<name>.md | Path-scoped rules with a YAML frontmatter paths list and Markdown guidance. |
+| .ai/agents/<name>.md | Claude Code subagent definition with YAML frontmatter, copied unchanged to .claude/agents/<name>.md. |
 | .ai/skills/<name>/SKILL.md | Reusable workflow instructions copied into each agent's expected skill format. |
 
 ## Authoring rules
@@ -463,6 +466,7 @@ Use .ai/ as the single source of truth for AI-agent configuration. Do not create
 - Put shared guidance in .ai/project.md.
 - Put agent-specific overrides in .ai/targets/<target>.md.
 - Put path-scoped guidance in .ai/rules/<name>.md with a paths list in YAML frontmatter. ai-sync maps these rules to native Claude Code .claude/rules files, native Kiro fileMatch steering files, and nested Codex AGENTS.md files.
+- Put Claude Code subagents in .ai/agents/<name>.md with YAML frontmatter (name, description, optional tools and model). ai-sync copies them unchanged to .claude/agents/; Codex and Kiro use different formats.
 - Put reusable workflows in .ai/skills/<name>/SKILL.md.
 - Declare Claude Code plugin marketplaces and plugins in .ai/plugins.yaml. Only the Claude target reads this file. Plain ai-sync installs enabled plugins automatically at scope project (skipped if claude is not on PATH); use ai-sync plugins for a different scope or to force a reinstall.
 - Declare Claude Code hooks in .ai/hooks.yaml. Only the Claude target reads this file.
@@ -472,7 +476,7 @@ Use .ai/ as the single source of truth for AI-agent configuration. Do not create
 
 ## Suggested prompt for an AI agent
 
-Create the .ai/ directory using the ai-sync convention. Add shared project guidance to .ai/project.md, define MCP servers in .ai/mcp.yaml, declare Claude Code plugins in .ai/plugins.yaml, declare Claude Code hooks in .ai/hooks.yaml, declare per-machine bootstrap commands in .ai/setup.yaml, put agent-specific instructions under .ai/targets/, add path-scoped guidance under .ai/rules/<name>.md, and add reusable workflows under .ai/skills/<name>/SKILL.md. Do not create CLAUDE.md, AGENTS.md, .codex/config.toml, .mcp.json, or .kiro/settings/mcp.json directly.
+Create the .ai/ directory using the ai-sync convention. Add shared project guidance to .ai/project.md, define MCP servers in .ai/mcp.yaml, declare Claude Code plugins in .ai/plugins.yaml, declare Claude Code hooks in .ai/hooks.yaml, declare per-machine bootstrap commands in .ai/setup.yaml, put agent-specific instructions under .ai/targets/, add path-scoped guidance under .ai/rules/<name>.md, add Claude Code subagents under .ai/agents/<name>.md, and add reusable workflows under .ai/skills/<name>/SKILL.md. Do not create CLAUDE.md, AGENTS.md, .codex/config.toml, .mcp.json, or .kiro/settings/mcp.json directly.
 `
 }
 
@@ -490,6 +494,7 @@ type source struct {
 	MCP     mcpConfig
 	Plugins pluginConfig
 	Hooks   hooksConfig
+	Agents  []agent
 	Skills  []skill
 }
 
@@ -548,6 +553,11 @@ type ruleFrontmatter struct {
 type skill struct {
 	Name  string
 	Files map[string][]byte
+}
+
+type agent struct {
+	Name    string
+	Content []byte
 }
 
 type generatedFile struct {
@@ -633,8 +643,12 @@ func loadSource(workdir string) (source, error) {
 	if err != nil {
 		return source{}, err
 	}
+	agents, err := loadAgents(filepath.Join(root, "agents"))
+	if err != nil {
+		return source{}, err
+	}
 
-	return source{Project: project, Targets: targets, Rules: rules, MCP: mcp, Plugins: plugins, Hooks: hooks, Skills: skills}, nil
+	return source{Project: project, Targets: targets, Rules: rules, MCP: mcp, Plugins: plugins, Hooks: hooks, Agents: agents, Skills: skills}, nil
 }
 
 func readRequiredText(path string) (string, error) {
@@ -1004,6 +1018,29 @@ func loadSkills(root string) ([]skill, error) {
 	return skills, nil
 }
 
+func loadAgents(root string) ([]agent, error) {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read .ai/agents: %w", err)
+	}
+
+	var agents []agent
+	for _, entry := range entries {
+		if entry.IsDir() || strings.HasPrefix(entry.Name(), ".") || filepath.Ext(entry.Name()) != ".md" {
+			continue
+		}
+		content, err := os.ReadFile(filepath.Join(root, entry.Name()))
+		if err != nil {
+			return nil, fmt.Errorf("read .ai/agents/%s: %w", entry.Name(), err)
+		}
+		agents = append(agents, agent{Name: entry.Name(), Content: content})
+	}
+	return agents, nil
+}
+
 func selectedTargets(target string) ([]string, error) {
 	if target == "" {
 		return append([]string(nil), allTargets...), nil
@@ -1061,6 +1098,9 @@ func renderClaude(source source) ([]generatedFile, error) {
 		files = append(files, generatedFile{Path: filepath.ToSlash(filepath.Join(".claude/rules", rule.Name+".md")), Content: renderClaudeRule(rule)})
 	}
 	files = append(files, copySkills(source.Skills, ".claude/skills", false)...)
+	for _, agent := range source.Agents {
+		files = append(files, generatedFile{Path: filepath.ToSlash(filepath.Join(".claude/agents", agent.Name)), Content: agent.Content})
+	}
 	return files, nil
 }
 
@@ -1398,7 +1438,7 @@ func appendGeneratedManifests(outputs []generatedFile) []generatedFile {
 
 func manifestOutputDir(path string) string {
 	path = filepath.ToSlash(path)
-	for _, dir := range []string{".claude/rules", ".kiro/steering"} {
+	for _, dir := range []string{".claude/agents", ".claude/rules", ".kiro/steering"} {
 		if strings.HasPrefix(path, dir+"/") {
 			return dir
 		}
@@ -1428,7 +1468,7 @@ func pruneTargetOutputs(workdir string, targets []string, outputs []generatedFil
 		switch target {
 		case "claude":
 			roots = append(roots, ".claude/skills")
-			manifestDirs = append(manifestDirs, ".claude/rules")
+			manifestDirs = append(manifestDirs, ".claude/agents", ".claude/rules")
 		case "codex":
 			roots = append(roots, ".agents/skills")
 		case "kiro":

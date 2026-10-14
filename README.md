@@ -153,13 +153,15 @@ You edit this:
   rules/
     frontend.md
     backend.md
+  agents/
+    comment-sicko.md
   skills/
     example/
       SKILL.md
 
 ai-sync generates this:
 
-Claude Code  -> CLAUDE.md, .claude/settings.json, .mcp.json, .claude/rules/, .claude/skills/
+Claude Code  -> CLAUDE.md, .claude/settings.json, .mcp.json, .claude/rules/, .claude/agents/, .claude/skills/
 Codex        -> AGENTS.md, nested */AGENTS.md for scoped rules, .codex/config.toml, .agents/skills/
 Kiro         -> .kiro/steering/, .kiro/settings/mcp.json, .kiro/powers/, .kiro/skills/
 ```
@@ -180,6 +182,7 @@ Kiro         -> .kiro/steering/, .kiro/settings/mcp.json, .kiro/powers/, .kiro/s
 | `.ai/plugins.yaml` | `.claude/settings.json` (`extraKnownMarketplaces`, `enabledPlugins`, `env`) | — | — |
 | `.ai/hooks.yaml` | `.claude/settings.json` (`hooks`) | — | — |
 | `.ai/setup.yaml` | executed directly on every sync, regardless of `--target` (see "Setup scripts" below) | executed directly | executed directly |
+| `.ai/agents/<name>.md` | `.claude/agents/<name>.md`, copied unchanged | — | — |
 | `.ai/skills/<name>/SKILL.md` | `.claude/skills/<name>/SKILL.md` | `.agents/skills/<name>/SKILL.md` | `.kiro/skills/<name>/SKILL.md` and `.kiro/powers/<name>/POWER.md` |
 | extra files under `.ai/skills/<name>/` | copied under `.claude/skills/<name>/` | copied under `.agents/skills/<name>/` | copied under `.kiro/skills/<name>/` and `.kiro/powers/<name>/` |
 
@@ -423,9 +426,26 @@ Generated mapping:
 
 Supporting files inside the skill folder are copied too.
 
+### 🤖 Authoring agents
+
+Put each Claude Code subagent in `.ai/agents/<name>.md`. Use YAML frontmatter with `name` and `description`, and optionally `tools` and `model`. For example, `.ai/agents/comment-sicko.md` can provide the `comment-sicko` subagent used by a skill:
+
+```md
+---
+name: comment-sicko
+description: Review code comments for accuracy.
+tools: Read, Grep
+model: sonnet
+---
+
+Review comments against the code they describe.
+```
+
+ai-sync copies the file unchanged to `.claude/agents/comment-sicko.md`. Codex and Kiro use different subagent formats, so this input produces no files for those targets. A manifest in `.claude/agents/` tracks generated files for pruning and `ai-sync clean`.
+
 ## 🧾 Generated ownership
 
-`ai-sync` writes generated headers and manifest files for generated directories it manages, including skills, Claude rules, Codex scoped `AGENTS.md` files, Kiro steering files, Kiro Skills, and Kiro Powers.
+`ai-sync` uses generated headers and manifests to track the directories it manages, including skills, Claude rules and agents, Codex scoped `AGENTS.md` files, Kiro steering files, Kiro Skills, and Kiro Powers. Claude agent files are copied unchanged, so their manifest records ownership without adding a header.
 
 Those manifests let the CLI prune stale generated files without deleting user-owned files added manually inside generated folders. When manifest-owned files are removed, `ai-sync` also removes now-empty generated parent directories bottom-up, stopping at the target root such as `.kiro/skills/` or `.agents/skills/`.
 

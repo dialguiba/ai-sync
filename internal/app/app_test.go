@@ -72,6 +72,7 @@ func TestConventionShowsCanonicalAuthoringGuide(t *testing.T) {
 		".ai/targets/codex.md",
 		".ai/targets/kiro.md",
 		".ai/rules/<name>.md",
+		".ai/agents/<name>.md",
 		"paths list in YAML frontmatter",
 		".ai/skills/<name>/SKILL.md",
 		"Do not create generated agent files directly",
@@ -516,6 +517,124 @@ func TestSyncPrunesStaleGeneratedSkillOutputs(t *testing.T) {
 	assertFileMissing(t, filepath.Join(dir, ".agents/skills/playwright-cli"))
 	assertFileMissing(t, filepath.Join(dir, ".kiro/powers/playwright-cli"))
 	assertFileMissing(t, filepath.Join(dir, ".kiro/skills/playwright-cli"))
+}
+
+func TestClaudeAgentsAreCopiedUnchangedAndListed(t *testing.T) {
+	dir := t.TempDir()
+	writeCanonicalSource(t, dir)
+	content := "---\r\nname: comment-sicko\r\ndescription: Check comments\r\ntools: Read, Grep\r\nmodel: sonnet\r\n---\r\n\r\n# Review comments\r\n"
+	writeFile(t, dir, ".ai/agents/comment-sicko.md", content)
+
+	for _, args := range [][]string{{"list"}, {"--dry-run"}} {
+		out, err := app.Run(dir, args)
+		if err != nil {
+			t.Fatalf("%v failed: %v", args, err)
+		}
+		for _, path := range []string{".claude/agents/comment-sicko.md", ".claude/agents/.ai-sync-manifest"} {
+			if !strings.Contains(out, path) {
+				t.Fatalf("expected %v output to contain %s, got %q", args, path, out)
+			}
+		}
+	}
+	assertFileMissing(t, filepath.Join(dir, ".claude/agents/comment-sicko.md"))
+
+	if _, err := app.Run(dir, nil); err != nil {
+		t.Fatalf("sync failed: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(dir, ".claude/agents/comment-sicko.md"))
+	if err != nil {
+		t.Fatalf("read generated agent: %v", err)
+	}
+	if string(got) != content {
+		t.Fatalf("agent changed during copy: got %q, want %q", got, content)
+	}
+	assertFileContains(t, filepath.Join(dir, ".claude/agents/.ai-sync-manifest"), "comment-sicko.md")
+	assertFileMissing(t, filepath.Join(dir, ".agents/agents/comment-sicko.md"))
+	assertFileMissing(t, filepath.Join(dir, ".kiro/agents/comment-sicko.md"))
+
+	for _, target := range []string{"codex", "kiro"} {
+		out, err := app.Run(dir, []string{"list", "--target", target})
+		if err != nil {
+			t.Fatalf("list %s failed: %v", target, err)
+		}
+		if strings.Contains(out, "comment-sicko.md") {
+			t.Fatalf("unexpected agent in %s output: %q", target, out)
+		}
+	}
+}
+
+func TestSyncPrunesRemovedClaudeAgentAndPreservesManualFiles(t *testing.T) {
+	dir := t.TempDir()
+	writeCanonicalSource(t, dir)
+	writeFile(t, dir, ".ai/agents/comment-sicko.md", "---\nname: comment-sicko\ndescription: Check comments\n---\n")
+	if _, err := app.Run(dir, []string{"--target", "claude"}); err != nil {
+		t.Fatalf("initial sync failed: %v", err)
+	}
+	writeFile(t, dir, ".claude/agents/manual.md", "# Manual agent\n")
+	if err := os.Remove(filepath.Join(dir, ".ai/agents/comment-sicko.md")); err != nil {
+		t.Fatalf("remove source agent: %v", err)
+	}
+
+	out, err := app.Run(dir, []string{"--target", "claude", "--dry-run"})
+	if err != nil {
+		t.Fatalf("dry-run prune failed: %v", err)
+	}
+	if !strings.Contains(out, "would remove .claude/agents/comment-sicko.md") {
+		t.Fatalf("expected dry-run prune output, got %q", out)
+	}
+	assertFileExists(t, filepath.Join(dir, ".claude/agents/comment-sicko.md"))
+
+	out, err = app.Run(dir, []string{"--target", "claude"})
+	if err != nil {
+		t.Fatalf("sync after agent removal failed: %v", err)
+	}
+	if !strings.Contains(out, "removed .claude/agents/comment-sicko.md") {
+		t.Fatalf("expected stale agent to be pruned, got %q", out)
+	}
+	assertFileMissing(t, filepath.Join(dir, ".claude/agents/comment-sicko.md"))
+	assertFileMissing(t, filepath.Join(dir, ".claude/agents/.ai-sync-manifest"))
+	assertFileExists(t, filepath.Join(dir, ".claude/agents/manual.md"))
+}
+
+func TestCleanCoversClaudeAgents(t *testing.T) {
+	dir := t.TempDir()
+	writeCanonicalSource(t, dir)
+	writeFile(t, dir, ".ai/agents/comment-sicko.md", "---\nname: comment-sicko\ndescription: Check comments\n---\n")
+	if _, err := app.Run(dir, []string{"--target", "claude"}); err != nil {
+		t.Fatalf("initial sync failed: %v", err)
+	}
+	writeFile(t, dir, ".claude/agents/manual.md", "# Manual agent\n")
+
+	out, err := app.Run(dir, []string{"clean", "--target", "claude", "--dry-run"})
+	if err != nil {
+		t.Fatalf("clean dry-run failed: %v", err)
+	}
+	if !strings.Contains(out, "would remove .claude/agents/comment-sicko.md") {
+		t.Fatalf("expected clean dry-run to list agent, got %q", out)
+	}
+	assertFileExists(t, filepath.Join(dir, ".claude/agents/comment-sicko.md"))
+
+	out, err = app.Run(dir, []string{"clean", "--target", "claude", "--force"})
+	if err != nil {
+		t.Fatalf("clean failed: %v", err)
+	}
+	if !strings.Contains(out, "removed .claude/agents/comment-sicko.md") {
+		t.Fatalf("expected clean to list agent, got %q", out)
+	}
+	assertFileMissing(t, filepath.Join(dir, ".claude/agents/comment-sicko.md"))
+	assertFileExists(t, filepath.Join(dir, ".claude/agents/manual.md"))
+}
+
+func TestSyncWithoutAgentsDirectoryIsNoOpForClaudeAgents(t *testing.T) {
+	dir := t.TempDir()
+	writeCanonicalSource(t, dir)
+	writeFile(t, dir, ".claude/agents/manual.md", "# Manual agent\n")
+
+	if _, err := app.Run(dir, []string{"--target", "claude"}); err != nil {
+		t.Fatalf("sync without agents directory failed: %v", err)
+	}
+	assertFileExists(t, filepath.Join(dir, ".claude/agents/manual.md"))
+	assertFileMissing(t, filepath.Join(dir, ".claude/agents/.ai-sync-manifest"))
 }
 
 func TestPruneRemovesEmptyGeneratedSkillParentDirectories(t *testing.T) {
