@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"gopkg.in/yaml.v3"
 )
@@ -209,6 +210,9 @@ func inventoryProject(workdir string, args []string) (string, error) {
 		if resource.Type != "plugin" {
 			continue
 		}
+		if resource.Enabled != nil && !*resource.Enabled {
+			continue
+		}
 		if len(resource.Variants) == 0 {
 			if owner, exists := seenClaudeInstalls[resource.Name]; exists && owner != resource.Name {
 				result.Diagnostics = append(result.Diagnostics, inventoryDiagnostic{Path: pluginsPath, Unit: resource.Name, Message: fmt.Sprintf("Claude install %q also belongs to plugin %q", resource.Name, owner)})
@@ -407,7 +411,7 @@ func inventorySkills(project string, result *inventoryResult, known map[string]b
 				result.Diagnostics = append(result.Diagnostics, inventoryDiagnostic{Path: rel, Message: inventoryCause(readErr)})
 				resource.Status = "invalid"
 			} else if file.Name() == "SKILL.md" && path == filepath.Join(skillRoot, "SKILL.md") {
-				if err := validateInventorySkill(contents); err != nil {
+				if err := validateInventorySkill(contents, name); err != nil {
 					result.Diagnostics = append(result.Diagnostics, inventoryDiagnostic{Path: rel, Message: err.Error()})
 					resource.Status = "invalid"
 				}
@@ -442,7 +446,7 @@ func inventorySkills(project string, result *inventoryResult, known map[string]b
 	}
 }
 
-func validateInventorySkill(contents []byte) error {
+func validateInventorySkill(contents []byte, directory string) error {
 	text := strings.ReplaceAll(string(contents), "\r\n", "\n")
 	if !strings.HasPrefix(text, "---\n") {
 		return errors.New("missing YAML frontmatter")
@@ -460,6 +464,12 @@ func validateInventorySkill(contents []byte) error {
 	}
 	if strings.TrimSpace(meta.Name) == "" || strings.TrimSpace(meta.Description) == "" {
 		return errors.New("YAML frontmatter needs name and description")
+	}
+	if len(meta.Name) > 64 || !skillName.MatchString(meta.Name) || strings.Contains(meta.Name, "--") || directory != "" && meta.Name != directory {
+		return errors.New("skill name must match directory and use 1-64 lowercase letters, digits, or single hyphens")
+	}
+	if utf8.RuneCountInString(meta.Description) > 1024 {
+		return errors.New("skill description exceeds 1024 characters")
 	}
 	return nil
 }

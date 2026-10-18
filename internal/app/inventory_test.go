@@ -335,7 +335,7 @@ func TestInventoryReportsMissingPluginRequirementsWithoutRunningCommands(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out, `"status":"pending"`) || !strings.Contains(out, "environment variable: MISSING_PLUGIN_TOKEN") || !strings.Contains(out, "MCP command path: ./bin/missing") {
+	if !strings.Contains(out, `"status":"pending"`) || strings.Contains(out, "environment variable: MISSING_PLUGIN_TOKEN") || !strings.Contains(out, "MCP command path: ./bin/missing") {
 		t.Fatalf("missing requirements not reported: %s", out)
 	}
 }
@@ -404,6 +404,108 @@ func TestCodexAcceptsMinimalAgentPluginsManifest(t *testing.T) {
 	}
 }
 
+func portableInventoryFixture(t *testing.T) string {
+	t.Helper()
+	project := t.TempDir()
+	writeFile(t, project, ".ai/project.md", "# Shared\n")
+	writeFile(t, project, ".ai/mcp.yaml", "servers: {}\n")
+	writeFile(t, project, ".ai/plugins.yaml", "plugins:\n  kit:\n    enabled: true\n    targets:\n      codex:\n        path: .ai/packages/kit\n")
+	writeFile(t, project, ".ai/packages/kit/plugin.json", `{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"kit"}`)
+	return project
+}
+
+func TestPortableMCPRejectsBadRemoteAndKeepsGoodServer(t *testing.T) {
+	for _, tc := range []struct{ name, url, headers string }{
+		{"relative", `/mcp`, `{}`},
+		{"insecure", `http://example.com/mcp`, `{}`},
+		{"userinfo", `https://user@example.com/mcp`, `{}`},
+		{"fragment", `https://example.com/mcp#part`, `{}`},
+		{"duplicate headers", `https://example.com/mcp`, `{"X-Test":"one","x-test":"two"}`},
+		{"bad header name", `https://example.com/mcp`, `{"Bad Header":"one"}`},
+		{"bad header value", `https://example.com/mcp`, `{"X-Test":"one\r\ntwo"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			project := portableInventoryFixture(t)
+			writeFile(t, project, ".ai/packages/kit/mcp.json", `{"$schema":"https://agent-plugins.org/schemas/1.0.0/mcp.schema.json","mcpServers":{"bad":{"type":"streamable-http","url":"`+tc.url+`","headers":`+tc.headers+`},"good":{"type":"sse","url":"http://127.0.0.1/mcp","headers":{"X-Literal":"${TOKEN}"}}}}`)
+			out, err := app.Run(project, []string{"inventory", project})
+			if err == nil || !strings.Contains(out, `MCP server bad:`) || !strings.Contains(out, `"mcp_servers":["good"]`) || strings.Contains(out, "environment variable: TOKEN") {
+				t.Fatalf("bad remote or valid neighbor handled incorrectly: %s %v", out, err)
+			}
+		})
+	}
+}
+
+func TestPortableMCPCommandIsOneExecutableAndUnknownPlaceholderIsLiteral(t *testing.T) {
+	project := portableInventoryFixture(t)
+	writeFile(t, project, ".ai/packages/kit/mcp.json", `{"$schema":"https://agent-plugins.org/schemas/1.0.0/mcp.schema.json","mcpServers":{"shell":{"type":"stdio","command":"node script.js"},"placeholder":{"type":"stdio","command":"${TOOL}"},"good":{"type":"stdio","command":"node","args":["${TOKEN}","${PLUGIN_ROOT}/script.js"],"env":{"TOKEN":"${TOKEN}"}}}}`)
+	out, err := app.Run(project, []string{"inventory", project})
+	if err == nil || !strings.Contains(out, `"mcp_servers":["good"]`) || strings.Contains(out, "environment variable: TOKEN") || !strings.Contains(out, "MCP server shell:") || !strings.Contains(out, "MCP server placeholder:") {
+		t.Fatalf("command validation or placeholder semantics wrong: %s %v", out, err)
+	}
+}
+
+func TestPortableMCPWrongShapedServerKeepsSibling(t *testing.T) {
+	project := portableInventoryFixture(t)
+	writeFile(t, project, ".ai/packages/kit/mcp.json", `{"$schema":"https://agent-plugins.org/schemas/1.0.0/mcp.schema.json","mcpServers":{"broken":"not an object","good":{"type":"stdio","command":"node"}}}`)
+	out, err := app.Run(project, []string{"inventory", project})
+	if err == nil || !strings.Contains(out, `"mcp_servers":["good"]`) || !strings.Contains(out, "MCP server broken:") {
+		t.Fatalf("bad server hid valid sibling: %s %v", out, err)
+	}
+}
+
+func TestPortableSkillNameMatchesDirectoryAndKeepsSibling(t *testing.T) {
+	project := portableInventoryFixture(t)
+	writeFile(t, project, ".ai/packages/kit/skills/good/SKILL.md", "---\nname: good\ndescription: Good skill\n---\n\nText\n")
+	writeFile(t, project, ".ai/packages/kit/skills/bad/SKILL.md", "---\nname: other\ndescription: Bad skill\n---\n\nText\n")
+	out, err := app.Run(project, []string{"inventory", project})
+	if err == nil || !strings.Contains(out, `"skills":["good"]`) || !strings.Contains(out, "invalid or missing skill frontmatter") {
+		t.Fatalf("skill validation lost valid sibling: %s %v", out, err)
+	}
+}
+
+func TestPortableSkillRejectsInvalidNames(t *testing.T) {
+	for _, name := range []string{"Bad", "bad--name", strings.Repeat("a", 65)} {
+		t.Run(name, func(t *testing.T) {
+			project := portableInventoryFixture(t)
+			writeFile(t, project, ".ai/packages/kit/skills/"+name+"/SKILL.md", "---\nname: "+name+"\ndescription: A skill\n---\n")
+			out, err := app.Run(project, []string{"inventory", project})
+			if err == nil || !strings.Contains(out, `"skills":[]`) {
+				t.Fatalf("invalid skill name accepted: %s %v", out, err)
+			}
+		})
+	}
+}
+
+func TestPortableCatalogShowsComponentSources(t *testing.T) {
+	project := portableInventoryFixture(t)
+	writeFile(t, project, ".ai/packages/kit/skills/search/SKILL.md", "---\nname: search\ndescription: Search things\n---\n")
+	writeFile(t, project, ".ai/packages/kit/mcp.json", `{"$schema":"https://agent-plugins.org/schemas/1.0.0/mcp.schema.json","mcpServers":{"docs":{"type":"streamable-http","url":"https://example.com/mcp"}}}`)
+	out, err := app.Run(project, []string{"inventory", project})
+	if err != nil || !strings.Contains(out, `"skill_sources":{"search":".ai/packages/kit/skills/search/SKILL.md"}`) || !strings.Contains(out, `"mcp_server_sources":{"docs":".ai/packages/kit/mcp.json"}`) {
+		t.Fatalf("component provenance missing: %s %v", out, err)
+	}
+}
+
+func TestDisabledPluginDoesNotCollideWithEnabledPackage(t *testing.T) {
+	project := portableInventoryFixture(t)
+	writeFile(t, project, ".ai/plugins.yaml", "plugins:\n  kit:\n    enabled: true\n    targets:\n      codex:\n        path: .ai/packages/kit\n  spare:\n    enabled: false\n    targets:\n      codex:\n        path: .ai/packages/spare\n")
+	writeFile(t, project, ".ai/packages/spare/plugin.json", `{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"kit"}`)
+	out, err := app.Run(project, []string{"inventory", project})
+	if err != nil || strings.Contains(out, "also belongs to plugin") {
+		t.Fatalf("disabled package created active collision: %s %v", out, err)
+	}
+}
+
+func TestCodexOverlayIsNotClaimedCompatibleWithoutValidation(t *testing.T) {
+	project := portableInventoryFixture(t)
+	writeFile(t, project, ".ai/packages/kit/.codex-plugin/plugin.json", `{"apps":"./.app.json"}`)
+	writeFile(t, project, ".ai/packages/kit/.app.json", `{"apps":{}}`)
+	out, err := app.Run(project, []string{"inventory", project})
+	if err != nil || !strings.Contains(out, `"status":"pending"`) || !strings.Contains(out, ".codex-plugin/plugin.json") || !strings.Contains(out, ".app.json") {
+		t.Fatalf("unvalidated Codex overlay claimed compatible: %s %v", out, err)
+	}
+}
+
 func TestInventoryChecksMCPArgumentsAndWorkingDirectory(t *testing.T) {
 	project := t.TempDir()
 	writeFile(t, project, ".ai/project.md", "# Shared\n")
@@ -412,7 +514,7 @@ func TestInventoryChecksMCPArgumentsAndWorkingDirectory(t *testing.T) {
 	writeFile(t, project, ".ai/packages/tool/plugin.json", `{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"tool"}`)
 	writeFile(t, project, ".ai/packages/tool/mcp.json", `{"$schema":"https://agent-plugins.org/schemas/1.0.0/mcp.schema.json","mcpServers":{"local":{"type":"stdio","command":"node","args":["./missing.js","${MISSING_ARG_TOKEN}"],"cwd":"./missing-dir"}}}`)
 	out, err := app.Run(project, []string{"inventory", project})
-	if err != nil || !strings.Contains(out, "MCP argument path: ./missing.js") || !strings.Contains(out, "MCP working directory: ./missing-dir") || !strings.Contains(out, "environment variable: MISSING_ARG_TOKEN") {
+	if err != nil || !strings.Contains(out, "MCP argument path: ./missing.js") || !strings.Contains(out, "MCP working directory: ./missing-dir") || strings.Contains(out, "environment variable: MISSING_ARG_TOKEN") {
 		t.Fatalf("MCP requirements missing: %s %v", out, err)
 	}
 }
