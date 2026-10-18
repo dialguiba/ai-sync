@@ -51,6 +51,24 @@ func TestInventoryReportsInvalidMCPDeclarationWithServerName(t *testing.T) {
 	}
 }
 
+func TestInventoryKeepsValidMCPServerBesideWrongShapedServer(t *testing.T) {
+	project := t.TempDir()
+	writeFile(t, project, ".ai/project.md", "# Shared\n")
+	writeFile(t, project, ".ai/mcp.yaml", "servers:\n  good:\n    command: echo\n  broken:\n    command: echo\n    args: wrong-shape\n")
+
+	out, err := app.Run(t.TempDir(), []string{"inventory", project})
+	if err == nil {
+		t.Fatal("invalid MCP declaration should fail")
+	}
+	doc := decodeInventory(t, out)
+	if doc.Status != "invalid" || len(doc.Resources) != 2 || doc.Resources[1].Type != "mcp_server" || doc.Resources[1].Name != "good" {
+		t.Fatalf("valid MCP server disappeared: %+v", doc)
+	}
+	if len(doc.Diagnostics) != 1 || doc.Diagnostics[0].Path != ".ai/mcp.yaml" || doc.Diagnostics[0].Unit != "broken" || !strings.Contains(doc.Diagnostics[0].Message, "args") {
+		t.Fatalf("unexpected MCP diagnostic: %+v", doc.Diagnostics)
+	}
+}
+
 func TestInventoryReportsInvalidPluginDeclarationWithIdentity(t *testing.T) {
 	project := t.TempDir()
 	writeFile(t, project, ".ai/project.md", "# Shared\n")
@@ -64,6 +82,28 @@ func TestInventoryReportsInvalidPluginDeclarationWithIdentity(t *testing.T) {
 	doc := decodeInventory(t, out)
 	if doc.Status != "invalid" || len(doc.Diagnostics) != 1 || doc.Diagnostics[0].Path != ".ai/plugins.yaml" || doc.Diagnostics[0].Unit != "malformed" || !strings.Contains(doc.Diagnostics[0].Message, "<plugin>@<marketplace>") {
 		t.Fatalf("unexpected plugin diagnostic: %+v", doc)
+	}
+}
+
+func TestInventoryKeepsValidPluginAndMarketplaceBesideWrongShapedDeclarations(t *testing.T) {
+	project := t.TempDir()
+	writeFile(t, project, ".ai/project.md", "# Shared\n")
+	writeFile(t, project, ".ai/mcp.yaml", "servers: {}\n")
+	writeFile(t, project, ".ai/plugins.yaml", "marketplaces:\n  good:\n    repo: org/good\n  broken:\n    repo: [wrong-shape]\nplugins:\n  good@good: true\n  broken@good: [wrong-shape]\nenv:\n  PUBLIC: present\n")
+
+	out, err := app.Run(t.TempDir(), []string{"inventory", project})
+	if err == nil {
+		t.Fatal("invalid plugin declarations should fail")
+	}
+	doc := decodeInventory(t, out)
+	if doc.Status != "invalid" || len(doc.Resources) != 2 || doc.Resources[1].Name != "good@good" || doc.Resources[1].Enabled == nil || !*doc.Resources[1].Enabled {
+		t.Fatalf("valid plugin disappeared: %+v", doc)
+	}
+	if got := doc.PluginConfiguration.Marketplaces["good"]; got.Repo != "org/good" {
+		t.Fatalf("valid marketplace disappeared: %+v", doc.PluginConfiguration)
+	}
+	if len(doc.Diagnostics) != 2 || doc.Diagnostics[0].Path != ".ai/plugins.yaml" || doc.Diagnostics[0].Unit != "broken" || !strings.Contains(doc.Diagnostics[0].Message, "repo") || doc.Diagnostics[1].Unit != "broken@good" || !strings.Contains(doc.Diagnostics[1].Message, "bool") {
+		t.Fatalf("unexpected declaration diagnostics: %+v", doc.Diagnostics)
 	}
 }
 
@@ -643,6 +683,26 @@ func TestInventoryReportsInvalidNamedEntriesAndKeepsValidNeighbors(t *testing.T)
 		if !found {
 			t.Fatalf("missing actionable diagnostic for %s: %+v", want.name, doc.Diagnostics)
 		}
+	}
+}
+
+func TestInventoryKeepsValidHooksAndSetupBesideWrongShapedEntries(t *testing.T) {
+	project := t.TempDir()
+	writeFile(t, project, ".ai/project.md", "# Shared\n")
+	writeFile(t, project, ".ai/mcp.yaml", "servers: {}\n")
+	writeFile(t, project, ".ai/hooks.yaml", "Bad: wrong-shape\nGood:\n  - hooks:\n      - type: command\n        command: echo safe\n")
+	writeFile(t, project, ".ai/setup.yaml", "bad:\n  check: [wrong-shape]\n  install: echo safe\ngood:\n  check: echo safe\n  install: echo safe\n")
+
+	out, err := app.Run(t.TempDir(), []string{"inventory", project})
+	if err == nil {
+		t.Fatal("invalid declarations should fail")
+	}
+	doc := decodeInventory(t, out)
+	if doc.Status != "invalid" || len(doc.Resources) != 3 || doc.Resources[1].Name != "Good" || doc.Resources[2].Name != "good" {
+		t.Fatalf("valid named declarations disappeared: %+v", doc)
+	}
+	if len(doc.Diagnostics) != 2 || doc.Diagnostics[0].Path != ".ai/hooks.yaml" || doc.Diagnostics[0].Unit != "Bad" || doc.Diagnostics[1].Path != ".ai/setup.yaml" || doc.Diagnostics[1].Unit != "bad" {
+		t.Fatalf("invalid named declaration lacks source and unit: %+v", doc.Diagnostics)
 	}
 }
 

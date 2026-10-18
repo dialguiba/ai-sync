@@ -112,54 +112,82 @@ func inventoryProject(workdir string, args []string) (string, error) {
 	if contents, err := os.ReadFile(filepath.Join(root, "mcp.yaml")); err != nil {
 		result.Diagnostics = append(result.Diagnostics, inventoryDiagnostic{Path: mcpPath, Message: inventoryCause(err)})
 	} else {
-		var config mcpConfig
-		if err := yaml.Unmarshal(contents, &config); err != nil {
+		root, err := inventoryYAMLRoot(contents)
+		if err != nil {
 			result.Diagnostics = append(result.Diagnostics, inventoryDiagnostic{Path: mcpPath, Message: err.Error()})
 		} else {
-			known[mcpPath] = true
-			for _, name := range sortedServerNames(config.Servers) {
-				if strings.TrimSpace(name) == "" {
-					result.Diagnostics = append(result.Diagnostics, inventoryDiagnostic{Path: mcpPath, Unit: name, Message: "server name must not be empty"})
-					continue
+			servers, err := inventoryYAMLSection(root, "servers")
+			if err != nil {
+				result.Diagnostics = append(result.Diagnostics, inventoryDiagnostic{Path: mcpPath, Message: err.Error()})
+			} else {
+				known[mcpPath] = true
+			}
+			inventoryYAMLNamedEntries(servers, mcpPath, &result.Diagnostics, func(name string, value *yaml.Node) {
+				var server mcpServer
+				if err := decodeInventoryMCPServer(value, &server); err != nil {
+					result.Diagnostics = append(result.Diagnostics, inventoryDiagnostic{Path: mcpPath, Unit: name, Message: err.Error()})
+					return
 				}
-				if strings.TrimSpace(config.Servers[name].Command) == "" {
+				if strings.TrimSpace(server.Command) == "" {
 					result.Diagnostics = append(result.Diagnostics, inventoryDiagnostic{Path: mcpPath, Unit: name, Message: "server command must not be empty"})
-					continue
+					return
 				}
 				result.Resources = append(result.Resources, inventoryResource{
 					Type: "mcp_server", Name: name, Sources: []string{mcpPath},
 					Destinations: []string{".codex/config.toml", ".kiro/settings/mcp.json", ".mcp.json"},
 				})
-			}
+			})
 		}
 	}
 	pluginsPath := ".ai/plugins.yaml"
 	if contents, err := os.ReadFile(filepath.Join(root, "plugins.yaml")); err == nil {
-		var config pluginConfig
-		if err := yaml.Unmarshal(contents, &config); err != nil {
+		pluginRoot, err := inventoryYAMLRoot(contents)
+		if err != nil {
 			result.Diagnostics = append(result.Diagnostics, inventoryDiagnostic{Path: pluginsPath, Message: err.Error()})
 		} else {
 			known[pluginsPath] = true
-			for _, name := range sortedStringMapKeys(config.Marketplaces) {
-				result.PluginConfiguration.Marketplaces[name] = marketplaceSourceJSON(config.Marketplaces[name])
+			section := func(name string) *yaml.Node {
+				entries, err := inventoryYAMLSection(pluginRoot, name)
+				if err != nil {
+					result.Diagnostics = append(result.Diagnostics, inventoryDiagnostic{Path: pluginsPath, Message: err.Error()})
+				}
+				return entries
 			}
-			result.PluginConfiguration.SharedEnvNames = sortedStringMapKeys(config.Env)
-			for _, name := range sortedStringMapKeys(config.Marketplaces) {
-				if err := validateMarketplace(name, config.Marketplaces[name]); err != nil {
+			inventoryYAMLNamedEntries(section("marketplaces"), pluginsPath, &result.Diagnostics, func(name string, value *yaml.Node) {
+				var marketplace marketplaceSource
+				if err := decodeInventoryMarketplace(value, &marketplace); err != nil {
+					result.Diagnostics = append(result.Diagnostics, inventoryDiagnostic{Path: pluginsPath, Unit: name, Message: err.Error()})
+					return
+				}
+				result.PluginConfiguration.Marketplaces[name] = marketplaceSourceJSON(marketplace)
+				if err := validateMarketplace(name, marketplace); err != nil {
 					result.Diagnostics = append(result.Diagnostics, inventoryDiagnostic{Path: pluginsPath, Unit: name, Message: err.Error()})
 				}
-			}
-			for _, name := range sortedStringMapKeys(config.Plugins) {
+			})
+			inventoryYAMLNamedEntries(section("env"), pluginsPath, &result.Diagnostics, func(name string, value *yaml.Node) {
+				var envValue string
+				if err := value.Decode(&envValue); err != nil {
+					result.Diagnostics = append(result.Diagnostics, inventoryDiagnostic{Path: pluginsPath, Unit: name, Message: "env value must be a string"})
+					return
+				}
+				result.PluginConfiguration.SharedEnvNames = append(result.PluginConfiguration.SharedEnvNames, name)
+			})
+			sort.Strings(result.PluginConfiguration.SharedEnvNames)
+			inventoryYAMLNamedEntries(section("plugins"), pluginsPath, &result.Diagnostics, func(name string, value *yaml.Node) {
 				if err := validatePluginKey(name); err != nil {
 					result.Diagnostics = append(result.Diagnostics, inventoryDiagnostic{Path: pluginsPath, Unit: name, Message: err.Error()})
-					continue
+					return
 				}
-				enabled := config.Plugins[name]
+				var enabled bool
+				if err := value.Decode(&enabled); err != nil {
+					result.Diagnostics = append(result.Diagnostics, inventoryDiagnostic{Path: pluginsPath, Unit: name, Message: fmt.Sprintf("plugin enabled flag must be bool: %v", err)})
+					return
+				}
 				result.Resources = append(result.Resources, inventoryResource{
 					Type: "plugin", Name: name, Sources: []string{pluginsPath},
 					Destinations: []string{".claude/settings.json"}, Enabled: &enabled,
 				})
-			}
+			})
 		}
 	} else if !os.IsNotExist(err) {
 		result.Diagnostics = append(result.Diagnostics, inventoryDiagnostic{Path: pluginsPath, Message: inventoryCause(err)})
@@ -391,6 +419,121 @@ func validateInventorySkill(contents []byte) error {
 		return errors.New("YAML frontmatter needs name and description")
 	}
 	return nil
+}
+
+func inventoryYAMLRoot(contents []byte) (*yaml.Node, error) {
+	var document yaml.Node
+	if err := yaml.Unmarshal(contents, &document); err != nil {
+		return nil, err
+	}
+	if len(document.Content) == 0 || document.Content[0].Tag == "!!null" {
+		return nil, nil
+	}
+	root := document.Content[0]
+	if root.Kind != yaml.MappingNode {
+		return nil, errors.New("expected a mapping")
+	}
+	return root, nil
+}
+
+func inventoryYAMLSection(root *yaml.Node, name string) (*yaml.Node, error) {
+	if root == nil {
+		return nil, nil
+	}
+	var section *yaml.Node
+	for i := 0; i < len(root.Content); i += 2 {
+		if root.Content[i].Value != name {
+			continue
+		}
+		if section != nil {
+			return nil, fmt.Errorf("duplicate %s section", name)
+		}
+		section = root.Content[i+1]
+	}
+	if section == nil || section.Tag == "!!null" {
+		return nil, nil
+	}
+	if section.Kind != yaml.MappingNode {
+		return nil, fmt.Errorf("%s: expected a mapping", name)
+	}
+	return section, nil
+}
+
+func decodeInventoryMCPServer(value *yaml.Node, server *mcpServer) error {
+	if value.Kind != yaml.MappingNode {
+		return errors.New("server: expected a mapping with a command")
+	}
+	seen := map[string]bool{}
+	for i := 0; i < len(value.Content); i += 2 {
+		field, item := value.Content[i].Value, value.Content[i+1]
+		if seen[field] {
+			return fmt.Errorf("duplicate server field %q", field)
+		}
+		seen[field] = true
+		var err error
+		switch field {
+		case "command":
+			err = item.Decode(&server.Command)
+		case "args":
+			err = item.Decode(&server.Args)
+		case "env":
+			err = item.Decode(&server.Env)
+		}
+		if err != nil {
+			return fmt.Errorf("%s: %w", field, err)
+		}
+	}
+	return nil
+}
+
+func decodeInventoryMarketplace(value *yaml.Node, marketplace *marketplaceSource) error {
+	if value.Kind != yaml.MappingNode {
+		return errors.New("marketplace: expected a mapping")
+	}
+	seen := map[string]bool{}
+	for i := 0; i < len(value.Content); i += 2 {
+		field, item := value.Content[i].Value, value.Content[i+1]
+		if seen[field] {
+			return fmt.Errorf("duplicate marketplace field %q", field)
+		}
+		seen[field] = true
+		var err error
+		switch field {
+		case "source":
+			err = item.Decode(&marketplace.Source)
+		case "repo":
+			err = item.Decode(&marketplace.Repo)
+		case "url":
+			err = item.Decode(&marketplace.URL)
+		case "path":
+			err = item.Decode(&marketplace.Path)
+		}
+		if err != nil {
+			return fmt.Errorf("%s: %w", field, err)
+		}
+	}
+	return nil
+}
+
+func inventoryYAMLNamedEntries(section *yaml.Node, source string, diagnostics *[]inventoryDiagnostic, visit func(string, *yaml.Node)) {
+	if section == nil {
+		return
+	}
+	seen := map[string]bool{}
+	for i := 0; i < len(section.Content); i += 2 {
+		nameNode, value := section.Content[i], section.Content[i+1]
+		name := nameNode.Value
+		if nameNode.Kind != yaml.ScalarNode || nameNode.Tag != "!!str" || strings.TrimSpace(name) == "" {
+			*diagnostics = append(*diagnostics, inventoryDiagnostic{Path: source, Unit: name, Message: "expected a non-empty string name"})
+			continue
+		}
+		if seen[name] {
+			*diagnostics = append(*diagnostics, inventoryDiagnostic{Path: source, Unit: name, Message: "duplicate name"})
+			continue
+		}
+		seen[name] = true
+		visit(name, value)
+	}
 }
 
 func inventoryNamedYAML(project, source, kind string, destinations []string) ([]inventoryResource, []inventoryDiagnostic) {
