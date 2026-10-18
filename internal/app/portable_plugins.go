@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -20,6 +21,8 @@ const mcpSchema = "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json"
 var envReference = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
 var gitCommit = regexp.MustCompile(`^[a-fA-F0-9]{40}$`)
 var pluginName = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$`)
+var skillName = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$`)
+var headerName = regexp.MustCompile(`^[!#$%&'*+.^_` + "`" + `|~0-9A-Za-z-]+$`)
 
 // A portable declaration has one logical identity and one native package per target.
 type portablePlugin struct {
@@ -36,16 +39,18 @@ type pluginTarget struct {
 }
 
 type inventoryPluginVariant struct {
-	Target       string       `json:"target"`
-	Status       string       `json:"status"`
-	Source       pluginTarget `json:"source"`
-	Manifest     string       `json:"manifest,omitempty"`
-	PackageName  string       `json:"package_name,omitempty"`
-	Version      string       `json:"version,omitempty"`
-	Skills       []string     `json:"skills"`
-	MCPServers   []string     `json:"mcp_servers"`
-	Unsupported  []string     `json:"unsupported"`
-	Requirements []string     `json:"requirements"`
+	Target           string            `json:"target"`
+	Status           string            `json:"status"`
+	Source           pluginTarget      `json:"source"`
+	Manifest         string            `json:"manifest,omitempty"`
+	PackageName      string            `json:"package_name,omitempty"`
+	Version          string            `json:"version,omitempty"`
+	Skills           []string          `json:"skills"`
+	MCPServers       []string          `json:"mcp_servers"`
+	SkillSources     map[string]string `json:"skill_sources"`
+	MCPServerSources map[string]string `json:"mcp_server_sources"`
+	Unsupported      []string          `json:"unsupported"`
+	Requirements     []string          `json:"requirements"`
 }
 
 func decodePluginDeclaration(name string, node *yaml.Node) (portablePlugin, *bool, error) {
@@ -174,7 +179,7 @@ func safePluginPath(path string) bool {
 }
 
 func inspectPluginTarget(project, name string, targetName string, source pluginTarget, known map[string]bool) (inventoryPluginVariant, []inventoryDiagnostic) {
-	v := inventoryPluginVariant{Target: targetName, Source: source, Skills: []string{}, MCPServers: []string{}, Unsupported: []string{}, Requirements: []string{}}
+	v := inventoryPluginVariant{Target: targetName, Source: source, Skills: []string{}, MCPServers: []string{}, SkillSources: map[string]string{}, MCPServerSources: map[string]string{}, Unsupported: []string{}, Requirements: []string{}}
 	if source.Path == "" {
 		v.Status = "unverified"
 		if source.Install != "" {
@@ -324,10 +329,11 @@ func inspectPluginTarget(project, name string, targetName string, source pluginT
 			if entry.IsDir() {
 				skillFile := filepath.Join(skillsRoot, entry.Name(), "SKILL.md")
 				data, readErr := os.ReadFile(skillFile)
-				if readErr != nil || validateInventorySkill(data) != nil {
+				if readErr != nil || validateInventorySkill(data, entry.Name()) != nil {
 					diagnostics = append(diagnostics, inventoryDiagnostic{Path: filepath.ToSlash(filepath.Join(source.Path, "skills", entry.Name(), "SKILL.md")), Unit: name, Message: "invalid or missing skill frontmatter"})
 				} else {
 					v.Skills = append(v.Skills, entry.Name())
+					v.SkillSources[entry.Name()] = filepath.ToSlash(filepath.Join(source.Path, "skills", entry.Name(), "SKILL.md"))
 				}
 			}
 		}
@@ -336,16 +342,8 @@ func inspectPluginTarget(project, name string, targetName string, source pluginT
 	}
 	if data, err := os.ReadFile(filepath.Join(root, "mcp.json")); err == nil {
 		var mcp struct {
-			Schema  string `json:"$schema"`
-			Servers map[string]struct {
-				Type    string            `json:"type"`
-				URL     string            `json:"url"`
-				Command string            `json:"command"`
-				Args    []string          `json:"args"`
-				Env     map[string]string `json:"env"`
-				Headers map[string]string `json:"headers"`
-				CWD     string            `json:"cwd"`
-			} `json:"mcpServers"`
+			Schema  string                     `json:"$schema"`
+			Servers map[string]json.RawMessage `json:"mcpServers"`
 		}
 		mcpErr := json.Unmarshal(data, &mcp)
 		if mcpErr == nil {
@@ -354,7 +352,20 @@ func inspectPluginTarget(project, name string, targetName string, source pluginT
 		if mcpErr != nil || mcp.Schema != mcpSchema || mcp.Servers == nil {
 			diagnostics = append(diagnostics, inventoryDiagnostic{Path: filepath.ToSlash(filepath.Join(source.Path, "mcp.json")), Unit: name, Message: "invalid Agent Plugins MCP configuration"})
 		} else {
-			for serverName, server := range mcp.Servers {
+			for serverName, rawServer := range mcp.Servers {
+				var server struct {
+					Type    string            `json:"type"`
+					URL     string            `json:"url"`
+					Command string            `json:"command"`
+					Args    []string          `json:"args"`
+					Env     map[string]string `json:"env"`
+					Headers map[string]string `json:"headers"`
+					CWD     string            `json:"cwd"`
+				}
+				if err := json.Unmarshal(rawServer, &server); err != nil {
+					diagnostics = append(diagnostics, inventoryDiagnostic{Path: filepath.ToSlash(filepath.Join(source.Path, "mcp.json")), Unit: name, Message: "MCP server " + serverName + ": " + err.Error()})
+					continue
+				}
 				if err := validateMCPServer(data, serverName, server.Type); err != nil {
 					diagnostics = append(diagnostics, inventoryDiagnostic{Path: filepath.ToSlash(filepath.Join(source.Path, "mcp.json")), Unit: name, Message: "MCP server " + serverName + ": " + err.Error()})
 					continue
@@ -364,20 +375,11 @@ func inspectPluginTarget(project, name string, targetName string, source pluginT
 					continue
 				}
 				v.MCPServers = append(v.MCPServers, serverName)
-				for _, value := range server.Env {
-					missingEnvReferences(value, &v.Requirements)
-				}
-				for _, value := range server.Headers {
-					missingEnvReferences(value, &v.Requirements)
-				}
-				missingEnvReferences(server.URL, &v.Requirements)
-				missingEnvReferences(server.Command, &v.Requirements)
+				v.MCPServerSources[serverName] = filepath.ToSlash(filepath.Join(source.Path, "mcp.json"))
 				checkPackageReference(root, server.Command, "MCP command path", &v.Requirements)
 				for _, arg := range server.Args {
-					missingEnvReferences(arg, &v.Requirements)
 					checkPackageReference(root, arg, "MCP argument path", &v.Requirements)
 				}
-				missingEnvReferences(server.CWD, &v.Requirements)
 				checkPackageReference(root, server.CWD, "MCP working directory", &v.Requirements)
 			}
 		}
@@ -403,6 +405,7 @@ func inspectPluginTarget(project, name string, targetName string, source pluginT
 						continue
 					}
 					v.MCPServers = append(v.MCPServers, serverName)
+					v.MCPServerSources[serverName] = filepath.ToSlash(filepath.Join(source.Path, ".mcp.json"))
 					missingEnvReferences(server.Command, &v.Requirements)
 					missingEnvReferences(server.URL, &v.Requirements)
 					checkPackageReference(root, server.Command, "MCP command path", &v.Requirements)
@@ -433,6 +436,13 @@ func inspectPluginTarget(project, name string, targetName string, source pluginT
 				v.Unsupported = append(v.Unsupported, component)
 			} else if targetName == "codex" && component == "hooks" {
 				v.Requirements = append(v.Requirements, "Codex desktop manual installation for hooks")
+			}
+		}
+	}
+	if targetName == "codex" {
+		for _, component := range []string{".codex-plugin/plugin.json", ".app.json"} {
+			if _, err := os.Stat(filepath.Join(root, component)); err == nil {
+				v.Requirements = append(v.Requirements, "Codex overlay requires validation: "+component)
 			}
 		}
 	}
@@ -522,12 +532,16 @@ func validateMCPServer(contents []byte, name, serverType string) error {
 			return err
 		}
 		var parsed struct {
-			Args []string          `json:"args"`
-			Env  map[string]string `json:"env"`
-			CWD  string            `json:"cwd"`
+			Command string            `json:"command"`
+			Args    []string          `json:"args"`
+			Env     map[string]string `json:"env"`
+			CWD     string            `json:"cwd"`
 		}
 		if err := json.Unmarshal(server, &parsed); err != nil {
 			return err
+		}
+		if !validPortableCommand(parsed.Command) {
+			return errors.New("command must be one bare executable or ./ plugin-relative path")
 		}
 		for key := range parsed.Env {
 			if key == "PLUGIN_ROOT" || key == "PLUGIN_DATA" {
@@ -551,15 +565,64 @@ func validateMCPServer(contents []byte, name, serverType string) error {
 			return err
 		}
 		var parsed struct {
+			URL     string            `json:"url"`
 			Headers map[string]string `json:"headers"`
 		}
 		if err := json.Unmarshal(server, &parsed); err != nil {
 			return err
 		}
+		if err := validatePortableURL(parsed.URL); err != nil {
+			return err
+		}
+		seen := map[string]bool{}
+		for name, value := range parsed.Headers {
+			if !headerName.MatchString(name) || !validHeaderValue(value) {
+				return fmt.Errorf("invalid HTTP header %q", name)
+			}
+			folded := strings.ToLower(name)
+			if seen[folded] {
+				return fmt.Errorf("duplicate HTTP header %q", name)
+			}
+			seen[folded] = true
+		}
 	default:
 		return fmt.Errorf("unsupported transport type %q", serverType)
 	}
 	return nil
+}
+
+func validPortableCommand(command string) bool {
+	if command == "" || strings.ContainsAny(command, " \t\r\n\"'`;$|&<>(){}") {
+		return false
+	}
+	if strings.HasPrefix(command, "./") {
+		return safePackageComponent(strings.TrimPrefix(command, "./"))
+	}
+	return command != "." && command != ".." && !strings.ContainsAny(command, "/\\")
+}
+
+func validatePortableURL(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil || u == nil || !u.IsAbs() || u.Opaque != "" || u.Hostname() == "" || u.User != nil || strings.Contains(raw, "#") || (u.Scheme != "http" && u.Scheme != "https") {
+		return errors.New("url must be an absolute HTTP(S) URL without credentials or fragment")
+	}
+	if u.Scheme == "http" {
+		host := u.Hostname()
+		ip := net.ParseIP(host)
+		if host != "localhost" && (ip == nil || !ip.IsLoopback()) {
+			return errors.New("non-loopback url must use HTTPS")
+		}
+	}
+	return nil
+}
+
+func validHeaderValue(value string) bool {
+	for i := 0; i < len(value); i++ {
+		if value[i] < 0x20 && value[i] != '\t' || value[i] == 0x7f {
+			return false
+		}
+	}
+	return true
 }
 
 func safePackageComponent(path string) bool {
