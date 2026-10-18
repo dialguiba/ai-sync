@@ -266,3 +266,104 @@ func TestInventoryRequiresCanonicalMCPButDoesNotParseAuxiliaryYAML(t *testing.T)
 		t.Fatalf("auxiliary YAML should remain an additional file: %v\n%s", err, out)
 	}
 }
+
+func TestInventoryGroupsSkillAndAuxiliaryFiles(t *testing.T) {
+	project := t.TempDir()
+	writeFile(t, project, ".ai/project.md", "# Shared\n")
+	writeFile(t, project, ".ai/mcp.yaml", "servers: {}\n")
+	writeFile(t, project, ".ai/skills/review/SKILL.md", "---\nname: review\ndescription: Review code.\n---\n\n# Review\n")
+	writeFile(t, project, ".ai/skills/review/references/checklist.md", "# Checklist\n")
+	writeFile(t, project, ".ai/notes.txt", "keep\n")
+
+	out, err := app.Run(t.TempDir(), []string{"inventory", project})
+	if err != nil {
+		t.Fatalf("inventory failed: %v", err)
+	}
+	doc := decodeInventory(t, out)
+	if doc.Status != "ok" || len(doc.Resources) != 2 || len(doc.Diagnostics) != 0 {
+		t.Fatalf("unexpected inventory: %+v", doc)
+	}
+	skill := doc.Resources[1]
+	if skill.Type != "skill" || skill.Name != "review" || !reflect.DeepEqual(skill.Sources, []string{
+		".ai/skills/review/SKILL.md", ".ai/skills/review/references/checklist.md",
+	}) || !reflect.DeepEqual(skill.Destinations, []string{
+		".agents/skills/review/SKILL.md", ".agents/skills/review/references/checklist.md",
+		".claude/skills/review/SKILL.md", ".claude/skills/review/references/checklist.md",
+		".kiro/powers/review/POWER.md", ".kiro/powers/review/references/checklist.md",
+		".kiro/skills/review/SKILL.md", ".kiro/skills/review/references/checklist.md",
+	}) {
+		t.Fatalf("unexpected skill resource: %+v", skill)
+	}
+	if !reflect.DeepEqual(doc.AdditionalFiles, []string{".ai/mcp.yaml", ".ai/notes.txt"}) {
+		t.Fatalf("skill files should not be additional: %v", doc.AdditionalFiles)
+	}
+	if _, err := os.Stat(filepath.Join(project, ".agents")); !os.IsNotExist(err) {
+		t.Fatalf("inventory wrote generated skill files: %v", err)
+	}
+}
+
+func TestInventoryReportsSkillWithoutSkillFileAndKeepsOtherResources(t *testing.T) {
+	project := t.TempDir()
+	writeFile(t, project, ".ai/project.md", "# Shared\n")
+	writeFile(t, project, ".ai/mcp.yaml", "servers: {}\n")
+	writeFile(t, project, ".ai/targets/codex.md", "# Codex\n")
+	writeFile(t, project, ".ai/skills/broken/references/note.md", "# Note\n")
+	writeFile(t, project, ".ai/skills/good/SKILL.md", "---\nname: good\ndescription: Good.\n---\n\n# Good\n")
+
+	out, err := app.Run(t.TempDir(), []string{"inventory", project})
+	if err == nil {
+		t.Fatal("skill without SKILL.md should invalidate inventory")
+	}
+	doc := decodeInventory(t, out)
+	if doc.Status != "invalid" || len(doc.Resources) != 4 || doc.Resources[2].Type != "skill" || doc.Resources[2].Name != "broken" || doc.Resources[3].Name != "good" {
+		t.Fatalf("inventory should retain both skills and instructions: %+v", doc)
+	}
+	if len(doc.Diagnostics) != 1 || doc.Diagnostics[0].Path != ".ai/skills/broken/SKILL.md" || !strings.Contains(doc.Diagnostics[0].Message, "not found") {
+		t.Fatalf("missing skill file needs a path and cause: %+v", doc.Diagnostics)
+	}
+	if !reflect.DeepEqual(doc.Resources[2].Destinations, []string{
+		".agents/skills/broken/references/note.md", ".claude/skills/broken/references/note.md",
+		".kiro/powers/broken/POWER.md", ".kiro/powers/broken/references/note.md",
+		".kiro/skills/broken/references/note.md",
+	}) {
+		t.Fatalf("invalid skill should include current Kiro Power destination: %+v", doc.Resources[2])
+	}
+	if !reflect.DeepEqual(doc.AdditionalFiles, []string{".ai/mcp.yaml"}) {
+		t.Fatalf("skill auxiliary should belong to invalid skill: %v", doc.AdditionalFiles)
+	}
+	if _, err := os.Stat(filepath.Join(project, ".agents")); !os.IsNotExist(err) {
+		t.Fatalf("inventory wrote generated skill files: %v", err)
+	}
+}
+
+func TestInventoryReportsMalformedAndUnreadableSkillFiles(t *testing.T) {
+	project := t.TempDir()
+	writeFile(t, project, ".ai/project.md", "# Shared\n")
+	writeFile(t, project, ".ai/mcp.yaml", "servers: {}\n")
+	writeFile(t, project, ".ai/skills/malformed/SKILL.md", "---\nname: [\n---\n\n# Broken\n")
+	writeFile(t, project, ".ai/skills/unreadable/SKILL.md", "---\nname: unreadable\ndescription: Unreadable.\n---\n")
+	if err := os.Remove(filepath.Join(project, ".ai/skills/unreadable/SKILL.md")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("missing.md", filepath.Join(project, ".ai/skills/unreadable/SKILL.md")); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := app.Run(t.TempDir(), []string{"inventory", project})
+	if err == nil {
+		t.Fatal("invalid skill files should fail")
+	}
+	doc := decodeInventory(t, out)
+	if doc.Status != "invalid" || len(doc.Resources) != 3 || len(doc.Diagnostics) != 2 {
+		t.Fatalf("unexpected invalid skill inventory: %+v", doc)
+	}
+	if doc.Diagnostics[0].Path != ".ai/skills/malformed/SKILL.md" || !strings.Contains(doc.Diagnostics[0].Message, "yaml") {
+		t.Fatalf("malformed skill needs YAML cause: %+v", doc.Diagnostics)
+	}
+	if doc.Diagnostics[1].Path != ".ai/skills/unreadable/SKILL.md" || !strings.Contains(doc.Diagnostics[1].Message, "not found") {
+		t.Fatalf("unreadable skill needs path and cause: %+v", doc.Diagnostics)
+	}
+	if !reflect.DeepEqual(doc.AdditionalFiles, []string{".ai/mcp.yaml"}) {
+		t.Fatalf("invalid skill files should remain owned by skills: %v", doc.AdditionalFiles)
+	}
+}

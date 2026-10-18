@@ -97,6 +97,7 @@ func inventoryProject(workdir string, args []string) (string, error) {
 	}
 	result.Resources = append(result.Resources, inventoryPathRules(root, known, &result.Diagnostics)...)
 	result.Resources = append(result.Resources, inventoryAgents(root, known, &result.Diagnostics)...)
+	inventorySkills(project, &result, known)
 	if _, err := os.ReadFile(filepath.Join(root, "mcp.yaml")); err != nil {
 		result.Diagnostics = append(result.Diagnostics, inventoryDiagnostic{Path: ".ai/mcp.yaml", Message: inventoryCause(err)})
 	}
@@ -217,6 +218,96 @@ func inventoryAgents(root string, known map[string]bool, diagnostics *[]inventor
 		})
 	}
 	return resources
+}
+
+func inventorySkills(project string, result *inventoryResult, known map[string]bool) {
+	root := filepath.Join(project, ".ai", "skills")
+	entries, err := os.ReadDir(root)
+	if os.IsNotExist(err) {
+		return
+	}
+	if err != nil {
+		result.Diagnostics = append(result.Diagnostics, inventoryDiagnostic{Path: ".ai/skills", Message: inventoryCause(err)})
+		return
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
+			continue
+		}
+		name := entry.Name()
+		resource := inventoryResource{Type: "skill", Name: name, Sources: []string{}, Destinations: []string{}}
+		skillRoot := filepath.Join(root, name)
+		err := filepath.WalkDir(skillRoot, func(path string, file fs.DirEntry, walkErr error) error {
+			rel, relErr := filepath.Rel(project, path)
+			if relErr != nil {
+				return relErr
+			}
+			rel = filepath.ToSlash(rel)
+			if walkErr != nil {
+				result.Diagnostics = append(result.Diagnostics, inventoryDiagnostic{Path: rel, Message: inventoryCause(walkErr)})
+				return nil
+			}
+			if file.IsDir() {
+				return nil
+			}
+			known[rel] = true
+			resource.Sources = append(resource.Sources, rel)
+			contents, readErr := os.ReadFile(path)
+			if readErr != nil {
+				result.Diagnostics = append(result.Diagnostics, inventoryDiagnostic{Path: rel, Message: inventoryCause(readErr)})
+			} else if file.Name() == "SKILL.md" && path == filepath.Join(skillRoot, "SKILL.md") {
+				if err := validateInventorySkill(contents); err != nil {
+					result.Diagnostics = append(result.Diagnostics, inventoryDiagnostic{Path: rel, Message: err.Error()})
+				}
+			}
+			withinSkill, err := filepath.Rel(skillRoot, path)
+			if err != nil {
+				return err
+			}
+			withinSkill = filepath.ToSlash(withinSkill)
+			for _, base := range []string{".agents/skills", ".claude/skills", ".kiro/skills"} {
+				resource.Destinations = append(resource.Destinations, filepath.ToSlash(filepath.Join(base, name, withinSkill)))
+			}
+			powerFile := withinSkill
+			if withinSkill == "SKILL.md" {
+				powerFile = "POWER.md"
+			}
+			resource.Destinations = append(resource.Destinations, filepath.ToSlash(filepath.Join(".kiro/powers", name, powerFile)))
+			return nil
+		})
+		if err != nil {
+			result.Diagnostics = append(result.Diagnostics, inventoryDiagnostic{Path: ".ai/skills/" + name, Message: inventoryCause(err)})
+		}
+		if !known[".ai/skills/"+name+"/SKILL.md"] {
+			result.Diagnostics = append(result.Diagnostics, inventoryDiagnostic{Path: ".ai/skills/" + name + "/SKILL.md", Message: "not found"})
+			resource.Destinations = append(resource.Destinations, filepath.ToSlash(filepath.Join(".kiro/powers", name, "POWER.md")))
+		}
+		sort.Strings(resource.Sources)
+		sort.Strings(resource.Destinations)
+		result.Resources = append(result.Resources, resource)
+	}
+}
+
+func validateInventorySkill(contents []byte) error {
+	text := strings.ReplaceAll(string(contents), "\r\n", "\n")
+	if !strings.HasPrefix(text, "---\n") {
+		return errors.New("missing YAML frontmatter")
+	}
+	frontmatter, _, ok := splitYAMLFrontmatter(text)
+	if !ok {
+		return errors.New("missing closing YAML frontmatter delimiter")
+	}
+	var meta struct {
+		Name        string `yaml:"name"`
+		Description string `yaml:"description"`
+	}
+	if err := yaml.Unmarshal([]byte(frontmatter), &meta); err != nil {
+		return fmt.Errorf("parse YAML frontmatter: %w", err)
+	}
+	if strings.TrimSpace(meta.Name) == "" || strings.TrimSpace(meta.Description) == "" {
+		return errors.New("YAML frontmatter needs name and description")
+	}
+	return nil
 }
 
 func encodeInventory(result inventoryResult) (string, error) {
