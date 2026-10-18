@@ -12,10 +12,18 @@ import (
 )
 
 type inventoryDocument struct {
-	Status    string `json:"status"`
+	Status              string `json:"status"`
+	PluginConfiguration struct {
+		Marketplaces map[string]struct {
+			Source string `json:"source"`
+			Repo   string `json:"repo"`
+		} `json:"marketplaces"`
+		SharedEnvNames []string `json:"shared_env_names"`
+	} `json:"plugin_configuration"`
 	Resources []struct {
 		Type         string   `json:"type"`
 		Name         string   `json:"name"`
+		Status       string   `json:"status"`
 		Sources      []string `json:"sources"`
 		Destinations []string `json:"destinations"`
 		Enabled      *bool    `json:"enabled"`
@@ -159,6 +167,12 @@ func TestInventoryListsDeclaredPluginsIncludingDisabledWithoutInstalling(t *test
 	if len(doc.AdditionalFiles) != 0 {
 		t.Fatalf("plugin marketplace or env inventoried as additional: %v", doc.AdditionalFiles)
 	}
+	if got := doc.PluginConfiguration.Marketplaces["tools"]; got.Source != "github" || got.Repo != "org/tools" {
+		t.Fatalf("marketplace declaration was lost: %+v", doc.PluginConfiguration)
+	}
+	if !reflect.DeepEqual(doc.PluginConfiguration.SharedEnvNames, []string{"SHARED_TOKEN"}) || strings.Contains(out, "example") {
+		t.Fatalf("shared env names should be visible without values: %s", out)
+	}
 	if _, err := os.Stat(marker); !os.IsNotExist(err) {
 		t.Fatalf("inventory ran plugin installer: %v", err)
 	}
@@ -249,7 +263,7 @@ func TestInventoryIncludesPathRulesAndCanonicalAgents(t *testing.T) {
 	writeFile(t, project, ".ai/rules/backend.md", "---\npaths:\n  - backend/**\n---\n\n# Backend\n")
 	writeFile(t, project, ".ai/agents/reviewer.md", "---\nname: reviewer\ndescription: Review code\n---\n")
 	writeFile(t, project, ".ai/agents/author.md", "---\nname: author\ndescription: Write code\n---\n")
-	before := snapshotProjectTree(t, project)
+	before := snapshotProject(t, project)
 
 	out, err := app.Run(t.TempDir(), []string{"inventory", project})
 	if err != nil {
@@ -276,7 +290,7 @@ func TestInventoryIncludesPathRulesAndCanonicalAgents(t *testing.T) {
 	if !reflect.DeepEqual(doc.AdditionalFiles, []string{}) {
 		t.Fatalf("classified files leaked into additional_files: %v", doc.AdditionalFiles)
 	}
-	if after := snapshotProjectTree(t, project); !reflect.DeepEqual(after, before) {
+	if after := snapshotProject(t, project); !reflect.DeepEqual(after, before) {
 		t.Fatalf("inventory changed project tree:\nbefore: %v\nafter: %v", before, after)
 	}
 }
@@ -295,7 +309,7 @@ func TestInventoryReportsMalformedRulesAndKeepsReadableResources(t *testing.T) {
 			writeFile(t, project, ".ai/rules/broken.md", testCase.contents)
 			writeFile(t, project, ".ai/rules/good.md", "---\npaths:\n  - src/**\n---\n\n# Good\n")
 			writeFile(t, project, ".ai/agents/reviewer.md", "---\nname: reviewer\ndescription: Review code\n---\n")
-			before := snapshotProjectTree(t, project)
+			before := snapshotProject(t, project)
 
 			out, err := app.Run(t.TempDir(), []string{"inventory", project})
 			if err == nil {
@@ -314,39 +328,11 @@ func TestInventoryReportsMalformedRulesAndKeepsReadableResources(t *testing.T) {
 			if !reflect.DeepEqual(doc.AdditionalFiles, []string{".ai/rules/broken.md"}) {
 				t.Fatalf("unexpected additional files: %v", doc.AdditionalFiles)
 			}
-			if after := snapshotProjectTree(t, project); !reflect.DeepEqual(after, before) {
+			if after := snapshotProject(t, project); !reflect.DeepEqual(after, before) {
 				t.Fatalf("inventory changed project tree:\nbefore: %v\nafter: %v", before, after)
 			}
 		})
 	}
-}
-
-func snapshotProjectTree(t *testing.T, root string) map[string]string {
-	t.Helper()
-	files := map[string]string{}
-	err := filepath.Walk(root, func(path string, info os.FileInfo, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		rel, err := filepath.Rel(root, path)
-		if err != nil {
-			return err
-		}
-		if info.IsDir() {
-			files[rel] = "directory"
-			return nil
-		}
-		contents, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		files[rel] = string(contents)
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("snapshot project tree: %v", err)
-	}
-	return files
 }
 
 func TestInventoryReportsMissingAndInvalidSourcesAsJSON(t *testing.T) {
@@ -425,7 +411,7 @@ func TestInventoryGroupsSkillAndAuxiliaryFiles(t *testing.T) {
 		t.Fatalf("unexpected inventory: %+v", doc)
 	}
 	skill := doc.Resources[1]
-	if skill.Type != "skill" || skill.Name != "review" || !reflect.DeepEqual(skill.Sources, []string{
+	if skill.Type != "skill" || skill.Name != "review" || skill.Status != "ok" || !reflect.DeepEqual(skill.Sources, []string{
 		".ai/skills/review/SKILL.md", ".ai/skills/review/references/checklist.md",
 	}) || !reflect.DeepEqual(skill.Destinations, []string{
 		".agents/skills/review/SKILL.md", ".agents/skills/review/references/checklist.md",
@@ -458,6 +444,9 @@ func TestInventoryReportsSkillWithoutSkillFileAndKeepsOtherResources(t *testing.
 	doc := decodeInventory(t, out)
 	if doc.Status != "invalid" || len(doc.Resources) != 4 || doc.Resources[2].Type != "skill" || doc.Resources[2].Name != "broken" || doc.Resources[3].Name != "good" {
 		t.Fatalf("inventory should retain both skills and instructions: %+v", doc)
+	}
+	if doc.Resources[2].Status != "invalid" || doc.Resources[3].Status != "ok" {
+		t.Fatalf("skill validity is not explicit on each resource: %+v", doc.Resources)
 	}
 	if len(doc.Diagnostics) != 1 || doc.Diagnostics[0].Path != ".ai/skills/broken/SKILL.md" || !strings.Contains(doc.Diagnostics[0].Message, "not found") {
 		t.Fatalf("missing skill file needs a path and cause: %+v", doc.Diagnostics)
@@ -497,6 +486,9 @@ func TestInventoryReportsMalformedAndUnreadableSkillFiles(t *testing.T) {
 	doc := decodeInventory(t, out)
 	if doc.Status != "invalid" || len(doc.Resources) != 3 || len(doc.Diagnostics) != 2 {
 		t.Fatalf("unexpected invalid skill inventory: %+v", doc)
+	}
+	if doc.Resources[1].Status != "invalid" || doc.Resources[2].Status != "invalid" {
+		t.Fatalf("malformed and unreadable skills must be marked invalid: %+v", doc.Resources)
 	}
 	if doc.Diagnostics[0].Path != ".ai/skills/malformed/SKILL.md" || !strings.Contains(doc.Diagnostics[0].Message, "yaml") {
 		t.Fatalf("malformed skill needs YAML cause: %+v", doc.Diagnostics)
@@ -644,7 +636,7 @@ func TestInventoryReportsInvalidNamedEntriesAndKeepsValidNeighbors(t *testing.T)
 	} {
 		found := false
 		for _, diagnostic := range doc.Diagnostics {
-			if diagnostic.Path == want.path && strings.Contains(diagnostic.Message, want.name) && strings.Contains(diagnostic.Message, want.cause) {
+			if diagnostic.Path == want.path && diagnostic.Unit == want.name && strings.Contains(diagnostic.Message, want.cause) {
 				found = true
 			}
 		}

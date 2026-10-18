@@ -34,6 +34,12 @@ La salida estándar contiene un documento JSON terminado en salto de línea. `re
       "enabled": false
     }
   ],
+  "plugin_configuration": {
+    "marketplaces": {
+      "tools": {"source": "github", "repo": "example/tools"}
+    },
+    "shared_env_names": ["TOOLS_TOKEN"]
+  },
   "additional_files": [],
   "diagnostics": []
 }
@@ -41,10 +47,10 @@ La salida estándar contiene un documento JSON terminado en salto de línea. `re
 
 Cada regla aparece una vez como `path_rule`, con el nombre tomado del archivo sin `.md`. Sus destinos incluyen las reglas de Claude y Kiro y los archivos `AGENTS.md` que Codex genera para los globs de `paths`. Cada agent aparece una vez y apunta a su destino de Claude. Una regla mal formada deja `status` en `invalid`; la regla permanece en `additional_files` y los demás recursos legibles siguen visibles.
 
-Cada skill aparece como un recurso con `SKILL.md` y archivos auxiliares. Sus destinos incluyen Claude, Codex, Kiro Skills y Kiro Powers. Para el inventario, `SKILL.md` debe tener frontmatter YAML con `name` y `description` no vacíos. Esta validación es más estricta que la copia de archivos del comando de sincronización. Una skill sin `SKILL.md` sigue visible como recurso inválido, junto con los demás recursos legibles.
+Cada skill aparece como un recurso con `SKILL.md` y archivos auxiliares. Sus destinos incluyen Claude, Codex, Kiro Skills y Kiro Powers. Para el inventario, `SKILL.md` debe tener frontmatter YAML con `name` y `description` no vacíos. Esta validación es más estricta que la copia de archivos del comando de sincronización. Los recursos de tipo `skill` llevan `status: "ok"` o `status: "invalid"`; una skill sin `SKILL.md` sigue visible con estado inválido, junto con los demás recursos legibles.
 
-Los servidores MCP se ordenan por nombre y se transforman a los tres destinos. Los plugins se ordenan por identidad; `enabled` refleja exactamente el valor declarado, incluso `false`. El inventario no inspecciona paquetes de plugins, no verifica su instalación ni afirma compatibilidad en otros agentes. Los marketplaces y los valores compartidos de `env` no son recursos independientes de un plugin.
+Los servidores MCP se ordenan por nombre y se transforman a los tres destinos. Los plugins se ordenan por identidad; `enabled` refleja exactamente el valor declarado, incluso `false`. El inventario no inspecciona paquetes de plugins, no verifica su instalación ni afirma compatibilidad en otros agentes. `plugin_configuration.marketplaces` conserva la fuente y ubicación de cada marketplace en la configuración compartida; `shared_env_names` enumera las claves de `env` en orden, sin revelar sus valores, que pueden contener secretos. Estos datos no son recursos independientes ni se atribuyen a un plugin individual. Si falta `plugins.yaml`, ambos campos contienen colecciones vacías.
 
 Un evento de hooks tiene como destino `.claude/settings.json`. Una entrada de setup tiene `destinations: []`: sus comandos se usan durante la sincronización, pero no generan un archivo de destino. Un archivo con entradas válidas queda representado por sus recursos y no se repite en `additional_files`. El inventario nunca ejecuta los comandos declarados.
 
-`status` vale `ok`, `missing` o `invalid`. Si falta `.ai/`, el estado es `missing`. Una fuente requerida ausente o ilegible, un archivo canónico mal formado o una declaración inválida dejan el estado en `invalid`. Ambos estados producen un código de salida no exitoso y mantienen el documento JSON en stdout. Cada diagnóstico incluye la ruta afectada y la causa en `message`; una declaración MCP, de plugin o de marketplace inválida identifica además la unidad en `unit`. Los recursos siguen el orden instrucciones, reglas, agents, skills, servidores MCP, plugins, eventos de hooks y entradas de setup; los archivos adicionales y diagnósticos se ordenan por ruta.
+`status` vale `ok`, `missing` o `invalid`. Si falta `.ai/`, el estado es `missing`. Una fuente requerida ausente o ilegible, un archivo canónico mal formado o una declaración inválida dejan el estado en `invalid`. Ambos estados producen un código de salida no exitoso y mantienen el documento JSON en stdout. Cada diagnóstico incluye la ruta afectada y la causa en `message`; una declaración MCP, de plugin, de marketplace, de evento de hooks o de entrada de setup inválida identifica además la unidad en `unit`. Los recursos siguen el orden instrucciones, reglas, agents, skills, servidores MCP, plugins, eventos de hooks y entradas de setup; los archivos adicionales y diagnósticos se ordenan por ruta.

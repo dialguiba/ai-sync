@@ -16,6 +16,7 @@ import (
 type inventoryResource struct {
 	Type         string   `json:"type"`
 	Name         string   `json:"name"`
+	Status       string   `json:"status,omitempty"`
 	Sources      []string `json:"sources"`
 	Destinations []string `json:"destinations"`
 	Enabled      *bool    `json:"enabled,omitempty"`
@@ -28,10 +29,16 @@ type inventoryDiagnostic struct {
 }
 
 type inventoryResult struct {
-	Status          string                `json:"status"`
-	Resources       []inventoryResource   `json:"resources"`
-	AdditionalFiles []string              `json:"additional_files"`
-	Diagnostics     []inventoryDiagnostic `json:"diagnostics"`
+	Status              string                       `json:"status"`
+	Resources           []inventoryResource          `json:"resources"`
+	PluginConfiguration inventoryPluginConfiguration `json:"plugin_configuration"`
+	AdditionalFiles     []string                     `json:"additional_files"`
+	Diagnostics         []inventoryDiagnostic        `json:"diagnostics"`
+}
+
+type inventoryPluginConfiguration struct {
+	Marketplaces   map[string]map[string]any `json:"marketplaces"`
+	SharedEnvNames []string                  `json:"shared_env_names"`
 }
 
 func inventoryProject(workdir string, args []string) (string, error) {
@@ -47,7 +54,8 @@ func inventoryProject(workdir string, args []string) (string, error) {
 	}
 	result := inventoryResult{
 		Status: "ok", Resources: []inventoryResource{},
-		AdditionalFiles: []string{}, Diagnostics: []inventoryDiagnostic{},
+		PluginConfiguration: inventoryPluginConfiguration{Marketplaces: map[string]map[string]any{}, SharedEnvNames: []string{}},
+		AdditionalFiles:     []string{}, Diagnostics: []inventoryDiagnostic{},
 	}
 	root := filepath.Join(project, ".ai")
 	info, err := os.Stat(root)
@@ -132,6 +140,10 @@ func inventoryProject(workdir string, args []string) (string, error) {
 			result.Diagnostics = append(result.Diagnostics, inventoryDiagnostic{Path: pluginsPath, Message: err.Error()})
 		} else {
 			known[pluginsPath] = true
+			for _, name := range sortedStringMapKeys(config.Marketplaces) {
+				result.PluginConfiguration.Marketplaces[name] = marketplaceSourceJSON(config.Marketplaces[name])
+			}
+			result.PluginConfiguration.SharedEnvNames = sortedStringMapKeys(config.Env)
 			for _, name := range sortedStringMapKeys(config.Marketplaces) {
 				if err := validateMarketplace(name, config.Marketplaces[name]); err != nil {
 					result.Diagnostics = append(result.Diagnostics, inventoryDiagnostic{Path: pluginsPath, Unit: name, Message: err.Error()})
@@ -286,7 +298,7 @@ func inventorySkills(project string, result *inventoryResult, known map[string]b
 			continue
 		}
 		name := entry.Name()
-		resource := inventoryResource{Type: "skill", Name: name, Sources: []string{}, Destinations: []string{}}
+		resource := inventoryResource{Type: "skill", Name: name, Status: "ok", Sources: []string{}, Destinations: []string{}}
 		skillRoot := filepath.Join(root, name)
 		err := filepath.WalkDir(skillRoot, func(path string, file fs.DirEntry, walkErr error) error {
 			rel, relErr := filepath.Rel(project, path)
@@ -296,6 +308,7 @@ func inventorySkills(project string, result *inventoryResult, known map[string]b
 			rel = filepath.ToSlash(rel)
 			if walkErr != nil {
 				result.Diagnostics = append(result.Diagnostics, inventoryDiagnostic{Path: rel, Message: inventoryCause(walkErr)})
+				resource.Status = "invalid"
 				return nil
 			}
 			if file.IsDir() {
@@ -306,9 +319,11 @@ func inventorySkills(project string, result *inventoryResult, known map[string]b
 			contents, readErr := os.ReadFile(path)
 			if readErr != nil {
 				result.Diagnostics = append(result.Diagnostics, inventoryDiagnostic{Path: rel, Message: inventoryCause(readErr)})
+				resource.Status = "invalid"
 			} else if file.Name() == "SKILL.md" && path == filepath.Join(skillRoot, "SKILL.md") {
 				if err := validateInventorySkill(contents); err != nil {
 					result.Diagnostics = append(result.Diagnostics, inventoryDiagnostic{Path: rel, Message: err.Error()})
+					resource.Status = "invalid"
 				}
 			}
 			withinSkill, err := filepath.Rel(skillRoot, path)
@@ -328,9 +343,11 @@ func inventorySkills(project string, result *inventoryResult, known map[string]b
 		})
 		if err != nil {
 			result.Diagnostics = append(result.Diagnostics, inventoryDiagnostic{Path: ".ai/skills/" + name, Message: inventoryCause(err)})
+			resource.Status = "invalid"
 		}
 		if !known[".ai/skills/"+name+"/SKILL.md"] {
 			result.Diagnostics = append(result.Diagnostics, inventoryDiagnostic{Path: ".ai/skills/" + name + "/SKILL.md", Message: "not found"})
+			resource.Status = "invalid"
 			resource.Destinations = append(resource.Destinations, filepath.ToSlash(filepath.Join(".kiro/powers", name, "POWER.md")))
 		}
 		sort.Strings(resource.Sources)
@@ -387,11 +404,11 @@ func inventoryNamedYAML(project, source, kind string, destinations []string) ([]
 		nameNode, value := root.Content[i], root.Content[i+1]
 		name := nameNode.Value
 		if nameNode.Kind != yaml.ScalarNode || nameNode.Tag != "!!str" || strings.TrimSpace(name) == "" {
-			diagnostics = append(diagnostics, inventoryDiagnostic{Path: source, Message: fmt.Sprintf("%s %q: expected a non-empty name", kind, name)})
+			diagnostics = append(diagnostics, inventoryDiagnostic{Path: source, Unit: name, Message: fmt.Sprintf("%s %q: expected a non-empty name", kind, name)})
 			continue
 		}
 		if seen[name] {
-			diagnostics = append(diagnostics, inventoryDiagnostic{Path: source, Message: fmt.Sprintf("%s %q: duplicate name", kind, name)})
+			diagnostics = append(diagnostics, inventoryDiagnostic{Path: source, Unit: name, Message: fmt.Sprintf("%s %q: duplicate name", kind, name)})
 			continue
 		}
 		seen[name] = true
@@ -418,7 +435,7 @@ func inventoryNamedYAML(project, source, kind string, destinations []string) ([]
 			entryErr = fmt.Errorf("unsupported inventory resource type %q", kind)
 		}
 		if entryErr != nil {
-			diagnostics = append(diagnostics, inventoryDiagnostic{Path: source, Message: fmt.Sprintf("%s %q: %v", kind, name, entryErr)})
+			diagnostics = append(diagnostics, inventoryDiagnostic{Path: source, Unit: name, Message: fmt.Sprintf("%s %q: %v", kind, name, entryErr)})
 			continue
 		}
 		resources = append(resources, inventoryResource{Type: kind, Name: name, Sources: []string{source}, Destinations: destinations})
