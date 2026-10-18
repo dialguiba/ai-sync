@@ -95,6 +95,8 @@ func inventoryProject(workdir string, args []string) (string, error) {
 	} {
 		addInstruction("agent_instruction", target.name, ".ai/targets/"+target.name+".md", target.destination)
 	}
+	result.Resources = append(result.Resources, inventoryPathRules(root, known, &result.Diagnostics)...)
+	result.Resources = append(result.Resources, inventoryAgents(root, known, &result.Diagnostics)...)
 	if _, err := os.ReadFile(filepath.Join(root, "mcp.yaml")); err != nil {
 		result.Diagnostics = append(result.Diagnostics, inventoryDiagnostic{Path: ".ai/mcp.yaml", Message: inventoryCause(err)})
 	}
@@ -144,6 +146,77 @@ func inventoryProject(workdir string, args []string) (string, error) {
 		result.Status = "invalid"
 	}
 	return encodeInventory(result)
+}
+
+func inventoryPathRules(root string, known map[string]bool, diagnostics *[]inventoryDiagnostic) []inventoryResource {
+	entries, err := os.ReadDir(filepath.Join(root, "rules"))
+	if err != nil {
+		if !os.IsNotExist(err) {
+			*diagnostics = append(*diagnostics, inventoryDiagnostic{Path: ".ai/rules", Message: inventoryCause(err)})
+		}
+		return nil
+	}
+	var resources []inventoryResource
+	for _, entry := range entries {
+		if entry.IsDir() || strings.HasPrefix(entry.Name(), ".") || filepath.Ext(entry.Name()) != ".md" {
+			continue
+		}
+		source := ".ai/rules/" + entry.Name()
+		contents, err := os.ReadFile(filepath.Join(root, "rules", entry.Name()))
+		if err != nil {
+			*diagnostics = append(*diagnostics, inventoryDiagnostic{Path: source, Message: inventoryCause(err)})
+			continue
+		}
+		name := strings.TrimSuffix(entry.Name(), ".md")
+		rule, err := parsePathRule(name, contents)
+		if err != nil {
+			*diagnostics = append(*diagnostics, inventoryDiagnostic{Path: source, Message: err.Error()})
+			continue
+		}
+		known[source] = true
+		destinations := []string{".claude/rules/" + entry.Name(), ".kiro/steering/" + entry.Name()}
+		scopes := map[string]bool{}
+		for _, pattern := range rule.Paths {
+			dir := codexScopeDir(pattern)
+			if dir == "" {
+				scopes["AGENTS.md"] = true
+			} else {
+				scopes[dir+"/AGENTS.md"] = true
+			}
+		}
+		for _, destination := range sortedStringMapKeys(scopes) {
+			destinations = append(destinations, destination)
+		}
+		resources = append(resources, inventoryResource{Type: "path_rule", Name: name, Sources: []string{source}, Destinations: destinations})
+	}
+	return resources
+}
+
+func inventoryAgents(root string, known map[string]bool, diagnostics *[]inventoryDiagnostic) []inventoryResource {
+	entries, err := os.ReadDir(filepath.Join(root, "agents"))
+	if err != nil {
+		if !os.IsNotExist(err) {
+			*diagnostics = append(*diagnostics, inventoryDiagnostic{Path: ".ai/agents", Message: inventoryCause(err)})
+		}
+		return nil
+	}
+	var resources []inventoryResource
+	for _, entry := range entries {
+		if entry.IsDir() || strings.HasPrefix(entry.Name(), ".") || filepath.Ext(entry.Name()) != ".md" {
+			continue
+		}
+		source := ".ai/agents/" + entry.Name()
+		if _, err := os.ReadFile(filepath.Join(root, "agents", entry.Name())); err != nil {
+			*diagnostics = append(*diagnostics, inventoryDiagnostic{Path: source, Message: inventoryCause(err)})
+			continue
+		}
+		known[source] = true
+		resources = append(resources, inventoryResource{
+			Type: "agent", Name: strings.TrimSuffix(entry.Name(), ".md"),
+			Sources: []string{source}, Destinations: []string{".claude/agents/" + entry.Name()},
+		})
+	}
+	return resources
 }
 
 func encodeInventory(result inventoryResult) (string, error) {

@@ -100,6 +100,114 @@ func TestInventoryReadsExplicitProjectWithoutWritingOrRunningSetup(t *testing.T)
 	}
 }
 
+func TestInventoryIncludesPathRulesAndCanonicalAgents(t *testing.T) {
+	project := t.TempDir()
+	writeFile(t, project, ".ai/project.md", "# Shared\n")
+	writeFile(t, project, ".ai/mcp.yaml", "servers: {}\n")
+	writeFile(t, project, ".ai/rules/frontend.md", "---\npaths:\n  - frontend/**\n  - '*.go'\n---\n\n# Frontend\n")
+	writeFile(t, project, ".ai/rules/backend.md", "---\npaths:\n  - backend/**\n---\n\n# Backend\n")
+	writeFile(t, project, ".ai/agents/reviewer.md", "---\nname: reviewer\ndescription: Review code\n---\n")
+	writeFile(t, project, ".ai/agents/author.md", "---\nname: author\ndescription: Write code\n---\n")
+	before := snapshotProjectTree(t, project)
+
+	out, err := app.Run(t.TempDir(), []string{"inventory", project})
+	if err != nil {
+		t.Fatalf("inventory failed: %v", err)
+	}
+	doc := decodeInventory(t, out)
+	if doc.Status != "ok" || len(doc.Diagnostics) != 0 || len(doc.Resources) != 5 {
+		t.Fatalf("unexpected inventory: %+v", doc)
+	}
+	for i, want := range []struct {
+		kind, name, source string
+		destinations       []string
+	}{
+		{"path_rule", "backend", ".ai/rules/backend.md", []string{".claude/rules/backend.md", ".kiro/steering/backend.md", "backend/AGENTS.md"}},
+		{"path_rule", "frontend", ".ai/rules/frontend.md", []string{".claude/rules/frontend.md", ".kiro/steering/frontend.md", "AGENTS.md", "frontend/AGENTS.md"}},
+		{"agent", "author", ".ai/agents/author.md", []string{".claude/agents/author.md"}},
+		{"agent", "reviewer", ".ai/agents/reviewer.md", []string{".claude/agents/reviewer.md"}},
+	} {
+		got := doc.Resources[i+1]
+		if got.Type != want.kind || got.Name != want.name || !reflect.DeepEqual(got.Sources, []string{want.source}) || !reflect.DeepEqual(got.Destinations, want.destinations) {
+			t.Fatalf("resource %d: got %+v, want %+v", i+1, got, want)
+		}
+	}
+	if !reflect.DeepEqual(doc.AdditionalFiles, []string{".ai/mcp.yaml"}) {
+		t.Fatalf("classified files leaked into additional_files: %v", doc.AdditionalFiles)
+	}
+	if after := snapshotProjectTree(t, project); !reflect.DeepEqual(after, before) {
+		t.Fatalf("inventory changed project tree:\nbefore: %v\nafter: %v", before, after)
+	}
+}
+
+func TestInventoryReportsMalformedRulesAndKeepsReadableResources(t *testing.T) {
+	for _, testCase := range []struct{ name, contents, cause string }{
+		{"missing paths", "---\ndescription: No paths\n---\n\n# Broken\n", "paths must contain at least one glob"},
+		{"invalid YAML", "---\npaths: [\n---\n\n# Broken\n", "yaml"},
+		{"missing opening delimiter", "paths:\n  - src/**\n---\n", "missing YAML frontmatter"},
+		{"malformed closing delimiter", "---\npaths:\n  - src/**\n---oops\n\n# Broken\n", "missing closing frontmatter delimiter"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			project := t.TempDir()
+			writeFile(t, project, ".ai/project.md", "# Shared\n")
+			writeFile(t, project, ".ai/mcp.yaml", "servers: {}\n")
+			writeFile(t, project, ".ai/rules/broken.md", testCase.contents)
+			writeFile(t, project, ".ai/rules/good.md", "---\npaths:\n  - src/**\n---\n\n# Good\n")
+			writeFile(t, project, ".ai/agents/reviewer.md", "---\nname: reviewer\ndescription: Review code\n---\n")
+			before := snapshotProjectTree(t, project)
+
+			out, err := app.Run(t.TempDir(), []string{"inventory", project})
+			if err == nil {
+				t.Fatal("malformed rule should return an error")
+			}
+			doc := decodeInventory(t, out)
+			if doc.Status != "invalid" || len(doc.Resources) != 3 || len(doc.Diagnostics) != 1 {
+				t.Fatalf("unexpected invalid inventory: %+v", doc)
+			}
+			if got := doc.Diagnostics[0]; got.Path != ".ai/rules/broken.md" || !strings.Contains(got.Message, testCase.cause) {
+				t.Fatalf("diagnostic lacks source and cause: %+v", got)
+			}
+			if doc.Resources[1].Name != "good" || doc.Resources[2].Name != "reviewer" {
+				t.Fatalf("readable neighbors disappeared: %+v", doc.Resources)
+			}
+			if !reflect.DeepEqual(doc.AdditionalFiles, []string{".ai/mcp.yaml", ".ai/rules/broken.md"}) {
+				t.Fatalf("unexpected additional files: %v", doc.AdditionalFiles)
+			}
+			if after := snapshotProjectTree(t, project); !reflect.DeepEqual(after, before) {
+				t.Fatalf("inventory changed project tree:\nbefore: %v\nafter: %v", before, after)
+			}
+		})
+	}
+}
+
+func snapshotProjectTree(t *testing.T, root string) map[string]string {
+	t.Helper()
+	files := map[string]string{}
+	err := filepath.Walk(root, func(path string, info os.FileInfo, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			files[rel] = "directory"
+			return nil
+		}
+		contents, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		files[rel] = string(contents)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("snapshot project tree: %v", err)
+	}
+	return files
+}
+
 func TestInventoryReportsMissingAndInvalidSourcesAsJSON(t *testing.T) {
 	project := t.TempDir()
 	other := t.TempDir()
