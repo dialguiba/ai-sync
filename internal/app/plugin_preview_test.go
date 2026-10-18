@@ -126,7 +126,10 @@ func TestPluginPreviewIncompatiblePendingAndUnverified(t *testing.T) {
 			t.Fatalf("unready plugin installable: %+v", p)
 		}
 	}
-	if states["claude-only"] != "incompatible" || states["needs-token"] != "pending" || states["remote"] != "unverified" || !strings.Contains(missing["needs-token"], "PREVIEW_MISSING_TOKEN") || !strings.Contains(missing["needs-token"], "./bin/missing") {
+	// Agent Plugins mcp.json treats ${VAR} as an opaque host-resolved placeholder,
+	// so only package-relative paths become requirements. Claude .mcp.json is the
+	// contract that expands environment variables and reports them as missing.
+	if states["claude-only"] != "incompatible" || states["needs-token"] != "pending" || states["remote"] != "unverified" || !strings.Contains(missing["needs-token"], "./bin/missing") || strings.Contains(missing["needs-token"], "environment variable:") {
 		t.Fatalf("unexpected preview: %+v", doc)
 	}
 }
