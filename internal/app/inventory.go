@@ -14,12 +14,13 @@ import (
 )
 
 type inventoryResource struct {
-	Type         string   `json:"type"`
-	Name         string   `json:"name"`
-	Status       string   `json:"status,omitempty"`
-	Sources      []string `json:"sources"`
-	Destinations []string `json:"destinations"`
-	Enabled      *bool    `json:"enabled,omitempty"`
+	Type         string                   `json:"type"`
+	Name         string                   `json:"name"`
+	Status       string                   `json:"status,omitempty"`
+	Sources      []string                 `json:"sources"`
+	Destinations []string                 `json:"destinations"`
+	Enabled      *bool                    `json:"enabled,omitempty"`
+	Variants     []inventoryPluginVariant `json:"variants,omitempty"`
 }
 
 type inventoryDiagnostic struct {
@@ -174,23 +175,65 @@ func inventoryProject(workdir string, args []string) (string, error) {
 			})
 			sort.Strings(result.PluginConfiguration.SharedEnvNames)
 			inventoryYAMLNamedEntries(section("plugins"), pluginsPath, &result.Diagnostics, func(name string, value *yaml.Node) {
-				if err := validatePluginKey(name); err != nil {
+				declaration, legacy, err := decodePluginDeclaration(name, value)
+				if err != nil {
 					result.Diagnostics = append(result.Diagnostics, inventoryDiagnostic{Path: pluginsPath, Unit: name, Message: err.Error()})
 					return
 				}
-				var enabled bool
-				if err := value.Decode(&enabled); err != nil {
-					result.Diagnostics = append(result.Diagnostics, inventoryDiagnostic{Path: pluginsPath, Unit: name, Message: fmt.Sprintf("plugin enabled flag must be bool: %v", err)})
+				if legacy != nil {
+					result.Resources = append(result.Resources, inventoryResource{Type: "plugin", Name: name, Sources: []string{pluginsPath}, Destinations: []string{".claude/settings.json"}, Enabled: legacy})
 					return
 				}
-				result.Resources = append(result.Resources, inventoryResource{
-					Type: "plugin", Name: name, Sources: []string{pluginsPath},
-					Destinations: []string{".claude/settings.json"}, Enabled: &enabled,
-				})
+				resource := inventoryResource{Type: "plugin", Name: name, Sources: []string{pluginsPath}, Destinations: []string{}, Enabled: &declaration.Enabled}
+				for _, target := range allTargets {
+					packageSource, intended := declaration.Targets[target]
+					if !intended {
+						continue
+					}
+					variant, diagnostics := inspectPluginTarget(project, name, target, packageSource, known)
+					result.Diagnostics = append(result.Diagnostics, diagnostics...)
+					resource.Variants = append(resource.Variants, variant)
+					if target == "claude" && packageSource.Install != "" {
+						resource.Destinations = append(resource.Destinations, ".claude/settings.json")
+					}
+				}
+				result.Resources = append(result.Resources, resource)
 			})
 		}
 	} else if !os.IsNotExist(err) {
 		result.Diagnostics = append(result.Diagnostics, inventoryDiagnostic{Path: pluginsPath, Message: inventoryCause(err)})
+	}
+	seenPackages := map[string]string{}
+	seenClaudeInstalls := map[string]string{}
+	for _, resource := range result.Resources {
+		if resource.Type != "plugin" {
+			continue
+		}
+		if len(resource.Variants) == 0 {
+			if owner, exists := seenClaudeInstalls[resource.Name]; exists && owner != resource.Name {
+				result.Diagnostics = append(result.Diagnostics, inventoryDiagnostic{Path: pluginsPath, Unit: resource.Name, Message: fmt.Sprintf("Claude install %q also belongs to plugin %q", resource.Name, owner)})
+			} else {
+				seenClaudeInstalls[resource.Name] = resource.Name
+			}
+		}
+		for _, variant := range resource.Variants {
+			if variant.Target == "claude" && variant.Source.Install != "" {
+				if owner, exists := seenClaudeInstalls[variant.Source.Install]; exists && owner != resource.Name {
+					result.Diagnostics = append(result.Diagnostics, inventoryDiagnostic{Path: pluginsPath, Unit: resource.Name, Message: fmt.Sprintf("Claude install %q also belongs to plugin %q", variant.Source.Install, owner)})
+				} else {
+					seenClaudeInstalls[variant.Source.Install] = resource.Name
+				}
+			}
+			if variant.PackageName == "" {
+				continue
+			}
+			key := variant.Target + "/" + variant.PackageName
+			if owner, exists := seenPackages[key]; exists && owner != resource.Name {
+				result.Diagnostics = append(result.Diagnostics, inventoryDiagnostic{Path: pluginsPath, Unit: resource.Name, Message: fmt.Sprintf("%s package %q also belongs to plugin %q", variant.Target, variant.PackageName, owner)})
+			} else {
+				seenPackages[key] = resource.Name
+			}
+		}
 	}
 	for _, declaration := range []struct {
 		path, kind   string

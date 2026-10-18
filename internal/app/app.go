@@ -153,6 +153,9 @@ func installPlugins(workdir string, args []string) (string, error) {
 		return "", err
 	}
 	if len(config.Plugins) == 0 {
+		if len(config.Portable) > 0 {
+			return "no Claude plugins declared in .ai/plugins.yaml\n", nil
+		}
 		return "no plugins declared in .ai/plugins.yaml\n", nil
 	}
 
@@ -457,7 +460,7 @@ Use .ai/ as the single source of truth for AI-agent configuration. Do not create
 | --- | --- |
 | .ai/project.md | Shared project rules, architecture, commands, conventions, and review expectations. |
 | .ai/mcp.yaml | Shared MCP server definitions. Reference environment variables instead of hardcoding secrets. |
-| .ai/plugins.yaml | Optional Claude Code plugin marketplaces, the plugins to enable, and the environment variables those plugins read. |
+| .ai/plugins.yaml | Optional Claude marketplaces and portable plugin declarations with per-target package sources. |
 | .ai/hooks.yaml | Optional Claude Code hooks (event name to matcher and command). |
 | .ai/setup.yaml | Optional per-machine bootstrap commands (name to check and install). Runs on every ai-sync. |
 | .ai/targets/claude.md | Claude Code-specific guidance only. |
@@ -474,7 +477,7 @@ Use .ai/ as the single source of truth for AI-agent configuration. Do not create
 - Put path-scoped guidance in .ai/rules/<name>.md with a paths list in YAML frontmatter. ai-sync maps these rules to native Claude Code .claude/rules files, native Kiro fileMatch steering files, and nested Codex AGENTS.md files.
 - Put Claude Code subagents in .ai/agents/<name>.md with YAML frontmatter (name, description, optional tools and model). ai-sync copies them unchanged to .claude/agents/; Codex and Kiro use different formats.
 - Put reusable workflows in .ai/skills/<name>/SKILL.md.
-- Declare Claude Code plugin marketplaces and plugins in .ai/plugins.yaml. Only the Claude target reads this file. Plain ai-sync installs enabled plugins automatically at scope project (skipped if claude is not on PATH); use ai-sync plugins for a different scope or to force a reinstall.
+- Declare Claude marketplaces or target-specific plugin packages in .ai/plugins.yaml. Inventory inspects local packages for Codex and Kiro; generation does not install them. Plain ai-sync installs enabled Claude plugins automatically at scope project (skipped if claude is not on PATH); use ai-sync plugins for a different scope or to force a reinstall.
 - Declare Claude Code hooks in .ai/hooks.yaml. Only the Claude target reads this file.
 - Declare per-machine bootstrap commands in .ai/setup.yaml. check must be cheap; it runs on every sync. install only runs when check fails.
 - Keep secrets out of .ai/mcp.yaml, .ai/plugins.yaml, .ai/hooks.yaml, and .ai/setup.yaml; use environment variables.
@@ -482,7 +485,7 @@ Use .ai/ as the single source of truth for AI-agent configuration. Do not create
 
 ## Suggested prompt for an AI agent
 
-Create the .ai/ directory using the ai-sync convention. Add shared project guidance to .ai/project.md, define MCP servers in .ai/mcp.yaml, declare Claude Code plugins in .ai/plugins.yaml, declare Claude Code hooks in .ai/hooks.yaml, declare per-machine bootstrap commands in .ai/setup.yaml, put agent-specific instructions under .ai/targets/, add path-scoped guidance under .ai/rules/<name>.md, add Claude Code subagents under .ai/agents/<name>.md, and add reusable workflows under .ai/skills/<name>/SKILL.md. Do not create CLAUDE.md, AGENTS.md, .codex/config.toml, .mcp.json, or .kiro/settings/mcp.json directly.
+Create the .ai/ directory using the ai-sync convention. Add shared project guidance to .ai/project.md, define MCP servers in .ai/mcp.yaml, declare plugins and per-target packages in .ai/plugins.yaml, declare Claude Code hooks in .ai/hooks.yaml, declare per-machine bootstrap commands in .ai/setup.yaml, put agent-specific instructions under .ai/targets/, add path-scoped guidance under .ai/rules/<name>.md, add Claude Code subagents under .ai/agents/<name>.md, and add reusable workflows under .ai/skills/<name>/SKILL.md. Do not create CLAUDE.md, AGENTS.md, .codex/config.toml, .mcp.json, or .kiro/settings/mcp.json directly.
 `
 }
 
@@ -516,7 +519,8 @@ type mcpServer struct {
 
 type pluginConfig struct {
 	Marketplaces map[string]marketplaceSource `yaml:"marketplaces"`
-	Plugins      map[string]bool              `yaml:"plugins"`
+	Plugins      map[string]bool              `yaml:"-"`
+	Portable     map[string]portablePlugin    `yaml:"-"`
 	Env          map[string]string            `yaml:"env"`
 }
 
@@ -758,19 +762,40 @@ func loadPlugins(path string) (pluginConfig, error) {
 		return pluginConfig{}, fmt.Errorf("read .ai/plugins.yaml: %w", err)
 	}
 
-	var config pluginConfig
-	if err := yaml.Unmarshal(contents, &config); err != nil {
+	var raw struct {
+		Marketplaces map[string]marketplaceSource `yaml:"marketplaces"`
+		Plugins      map[string]yaml.Node         `yaml:"plugins"`
+		Env          map[string]string            `yaml:"env"`
+	}
+	if err := yaml.Unmarshal(contents, &raw); err != nil {
 		return pluginConfig{}, fmt.Errorf("parse .ai/plugins.yaml: %w", err)
 	}
+	config := pluginConfig{Marketplaces: raw.Marketplaces, Plugins: map[string]bool{}, Portable: map[string]portablePlugin{}, Env: raw.Env}
 
 	for _, name := range sortedStringMapKeys(config.Marketplaces) {
 		if err := validateMarketplace(name, config.Marketplaces[name]); err != nil {
 			return pluginConfig{}, err
 		}
 	}
-	for _, name := range sortedStringMapKeys(config.Plugins) {
-		if err := validatePluginKey(name); err != nil {
+	for _, name := range sortedStringMapKeys(raw.Plugins) {
+		node := raw.Plugins[name]
+		declaration, legacy, err := decodePluginDeclaration(name, &node)
+		if err != nil {
 			return pluginConfig{}, err
+		}
+		if legacy != nil {
+			if _, exists := config.Plugins[name]; exists {
+				return pluginConfig{}, fmt.Errorf(".ai/plugins.yaml Claude plugin %q declared more than once", name)
+			}
+			config.Plugins[name] = *legacy
+		} else {
+			config.Portable[name] = declaration
+			if target, ok := declaration.Targets["claude"]; ok && target.Install != "" {
+				if _, exists := config.Plugins[target.Install]; exists {
+					return pluginConfig{}, fmt.Errorf(".ai/plugins.yaml Claude plugin %q declared more than once", target.Install)
+				}
+				config.Plugins[target.Install] = declaration.Enabled
+			}
 		}
 	}
 	return config, nil

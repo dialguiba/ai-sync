@@ -218,6 +218,271 @@ func TestInventoryListsDeclaredPluginsIncludingDisabledWithoutInstalling(t *test
 	}
 }
 
+func TestInventoryInspectsPortablePluginAsOneUnit(t *testing.T) {
+	project := t.TempDir()
+	writeFile(t, project, ".ai/project.md", "# Shared\n")
+	writeFile(t, project, ".ai/mcp.yaml", "servers: {}\n")
+	writeFile(t, project, ".ai/plugins.yaml", "plugins:\n  toolkit:\n    enabled: true\n    targets:\n      codex:\n        path: .ai/packages/toolkit\n      kiro:\n        path: .ai/packages/toolkit\n")
+	writeFile(t, project, ".ai/packages/toolkit/plugin.json", `{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"toolkit","version":"1.0.0","description":"Tools","author":{"name":"Team"},"keywords":["toolkit"]}`)
+	writeFile(t, project, ".ai/packages/toolkit/skills/search/SKILL.md", "---\nname: search\ndescription: Search things\n---\n\nSearch.\n")
+	writeFile(t, project, ".ai/packages/toolkit/mcp.json", `{"$schema":"https://agent-plugins.org/schemas/1.0.0/mcp.schema.json","mcpServers":{"docs":{"type":"streamable-http","url":"https://example.com/mcp"}}}`)
+	out, err := app.Run(project, []string{"inventory", project})
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := app.Run(project, []string{"inventory", project})
+	if err != nil || again != out {
+		t.Fatalf("portable inventory is not deterministic: %v", err)
+	}
+	var doc struct {
+		Resources []struct {
+			Type     string `json:"type"`
+			Name     string `json:"name"`
+			Variants []struct {
+				Target     string   `json:"target"`
+				Status     string   `json:"status"`
+				Skills     []string `json:"skills"`
+				MCPServers []string `json:"mcp_servers"`
+			} `json:"variants"`
+		} `json:"resources"`
+		AdditionalFiles []string `json:"additional_files"`
+	}
+	if err := json.Unmarshal([]byte(out), &doc); err != nil {
+		t.Fatal(err)
+	}
+	if len(doc.Resources) != 2 || doc.Resources[1].Name != "toolkit" || len(doc.Resources[1].Variants) != 2 {
+		t.Fatalf("unexpected plugin inventory: %s", out)
+	}
+	for _, variant := range doc.Resources[1].Variants {
+		if variant.Status != "compatible" || !reflect.DeepEqual(variant.Skills, []string{"search"}) || !reflect.DeepEqual(variant.MCPServers, []string{"docs"}) {
+			t.Fatalf("unexpected variant: %+v", variant)
+		}
+	}
+	if len(doc.AdditionalFiles) != 0 {
+		t.Fatalf("package files should belong to plugin: %v", doc.AdditionalFiles)
+	}
+}
+
+func TestInventoryReportsClaudeOnlyAndUnverifiedPluginVariants(t *testing.T) {
+	project := t.TempDir()
+	writeFile(t, project, ".ai/project.md", "# Shared\n")
+	writeFile(t, project, ".ai/mcp.yaml", "servers: {}\n")
+	writeFile(t, project, ".ai/plugins.yaml", "plugins:\n  claude-kit:\n    enabled: true\n    targets:\n      codex:\n        path: .ai/packages/claude-kit\n      kiro:\n        git: https://example.com/kit.git\n        ref: 0123456789012345678901234567890123456789\n")
+	writeFile(t, project, ".ai/packages/claude-kit/.claude-plugin/plugin.json", `{"name":"claude-kit"}`)
+	out, err := app.Run(project, []string{"inventory", project})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Resources []struct {
+			Variants []struct {
+				Target      string   `json:"target"`
+				Status      string   `json:"status"`
+				Skills      []string `json:"skills"`
+				Unsupported []string `json:"unsupported"`
+			} `json:"variants"`
+		} `json:"resources"`
+	}
+	if err := json.Unmarshal([]byte(out), &doc); err != nil {
+		t.Fatal(err)
+	}
+	variants := doc.Resources[1].Variants
+	if len(variants) != 2 || variants[0].Status != "incompatible" || variants[1].Status != "unverified" || len(variants[1].Skills) != 0 || len(variants[0].Unsupported) == 0 {
+		t.Fatalf("wrong compatibility: %s", out)
+	}
+}
+
+func TestInventoryRejectsPackageSymlinkEscape(t *testing.T) {
+	project := t.TempDir()
+	writeFile(t, project, ".ai/project.md", "# Shared\n")
+	writeFile(t, project, ".ai/mcp.yaml", "servers: {}\n")
+	writeFile(t, project, ".ai/plugins.yaml", "plugins:\n  escape:\n    enabled: true\n    targets:\n      codex:\n        path: .ai/packages/escape\n")
+	if err := os.MkdirAll(filepath.Join(project, ".ai/packages"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(t.TempDir(), filepath.Join(project, ".ai/packages/escape")); err != nil {
+		t.Fatal(err)
+	}
+	out, err := app.Run(project, []string{"inventory", project})
+	if err == nil || !strings.Contains(out, "escapes .ai/") {
+		t.Fatalf("symlink escape accepted: %s %v", out, err)
+	}
+}
+
+func TestInventoryRejectsNestedPackageSymlinkBeforeReadingIt(t *testing.T) {
+	project := t.TempDir()
+	writeFile(t, project, ".ai/project.md", "# Shared\n")
+	writeFile(t, project, ".ai/mcp.yaml", "servers: {}\n")
+	writeFile(t, project, ".ai/plugins.yaml", "plugins:\n  linked:\n    enabled: true\n    targets:\n      codex:\n        path: .ai/packages/linked\n")
+	writeFile(t, project, ".ai/packages/linked/plugin.json", `{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"linked"}`)
+	if err := os.Symlink(t.TempDir(), filepath.Join(project, ".ai/packages/linked/skills")); err != nil {
+		t.Fatal(err)
+	}
+	out, err := app.Run(project, []string{"inventory", project})
+	if err == nil || !strings.Contains(out, "symlink in package is unsupported") {
+		t.Fatalf("nested symlink accepted: %s %v", out, err)
+	}
+}
+
+func TestInventoryReportsMissingPluginRequirementsWithoutRunningCommands(t *testing.T) {
+	project := t.TempDir()
+	writeFile(t, project, ".ai/project.md", "# Shared\n")
+	writeFile(t, project, ".ai/mcp.yaml", "servers: {}\n")
+	writeFile(t, project, ".ai/plugins.yaml", "plugins:\n  local:\n    enabled: true\n    targets:\n      codex:\n        path: .ai/packages/local\n")
+	writeFile(t, project, ".ai/packages/local/plugin.json", `{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"local","version":"1.0.0","description":"Local"}`)
+	writeFile(t, project, ".ai/packages/local/mcp.json", `{"$schema":"https://agent-plugins.org/schemas/1.0.0/mcp.schema.json","mcpServers":{"tool":{"type":"stdio","command":"./bin/missing","env":{"TOKEN":"${MISSING_PLUGIN_TOKEN}"}}}}`)
+	out, err := app.Run(project, []string{"inventory", project})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, `"status":"pending"`) || !strings.Contains(out, "environment variable: MISSING_PLUGIN_TOKEN") || !strings.Contains(out, "MCP command path: ./bin/missing") {
+		t.Fatalf("missing requirements not reported: %s", out)
+	}
+}
+
+func TestInventoryFlagsNativePluginIdentityCollision(t *testing.T) {
+	project := t.TempDir()
+	writeFile(t, project, ".ai/project.md", "# Shared\n")
+	writeFile(t, project, ".ai/mcp.yaml", "servers: {}\n")
+	writeFile(t, project, ".ai/plugins.yaml", "plugins:\n  alpha:\n    enabled: true\n    targets:\n      codex:\n        path: .ai/packages/alpha\n  beta:\n    enabled: true\n    targets:\n      codex:\n        path: .ai/packages/beta\n")
+	for _, name := range []string{"alpha", "beta"} {
+		writeFile(t, project, ".ai/packages/"+name+"/plugin.json", `{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"same","version":"1.0.0","description":"Same"}`)
+	}
+	out, err := app.Run(project, []string{"inventory", project})
+	if err == nil || !strings.Contains(out, `"unit":"beta"`) || !strings.Contains(out, `package \"same\" also belongs to plugin \"alpha\"`) {
+		t.Fatalf("collision not reported: %s %v", out, err)
+	}
+}
+
+func TestInventoryKeepsValidStructuredPluginBesideUnsafePath(t *testing.T) {
+	project := t.TempDir()
+	writeFile(t, project, ".ai/project.md", "# Shared\n")
+	writeFile(t, project, ".ai/mcp.yaml", "servers: {}\n")
+	writeFile(t, project, ".ai/plugins.yaml", "plugins:\n  unsafe:\n    enabled: true\n    targets:\n      codex:\n        path: .ai/../outside\n  remote:\n    enabled: false\n    targets:\n      codex:\n        git: https://example.com/remote.git\n        ref: 0123456789012345678901234567890123456789\n")
+	out, err := app.Run(project, []string{"inventory", project})
+	if err == nil {
+		t.Fatal("unsafe path accepted")
+	}
+	doc := decodeInventory(t, out)
+	if doc.Status != "invalid" || len(doc.Resources) != 2 || doc.Resources[1].Name != "remote" || len(doc.Diagnostics) != 1 || doc.Diagnostics[0].Unit != "unsafe" {
+		t.Fatalf("valid neighbor lost: %s", out)
+	}
+}
+
+func TestKiroVariantWithoutActivationMetadataIsIncompatible(t *testing.T) {
+	project := t.TempDir()
+	writeFile(t, project, ".ai/project.md", "# Shared\n")
+	writeFile(t, project, ".ai/mcp.yaml", "servers: {}\n")
+	writeFile(t, project, ".ai/plugins.yaml", "plugins:\n  plain:\n    enabled: true\n    targets:\n      kiro:\n        path: .ai/packages/plain\n")
+	writeFile(t, project, ".ai/packages/plain/plugin.json", `{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"plain","version":"1.0.0","description":"Plain"}`)
+	out, err := app.Run(project, []string{"inventory", project})
+	if err != nil || !strings.Contains(out, `"status":"incompatible"`) || !strings.Contains(out, "Kiro manifest author.name") || !strings.Contains(out, "Kiro manifest keywords") {
+		t.Fatalf("Kiro metadata not checked: %s %v", out, err)
+	}
+}
+
+func TestMissingLocalPluginCanStillBeInventoried(t *testing.T) {
+	project := t.TempDir()
+	writeFile(t, project, ".ai/project.md", "# Shared\n")
+	writeFile(t, project, ".ai/mcp.yaml", "servers: {}\n")
+	writeFile(t, project, ".ai/plugins.yaml", "plugins:\n  absent:\n    enabled: true\n    targets:\n      codex:\n        path: .ai/packages/absent\n")
+	out, err := app.Run(project, []string{"inventory", project})
+	if err != nil || !strings.Contains(out, `"status":"unverified"`) || !strings.Contains(out, "package path: .ai/packages/absent") {
+		t.Fatalf("missing package should be copyable: %s %v", out, err)
+	}
+}
+
+func TestCodexAcceptsMinimalAgentPluginsManifest(t *testing.T) {
+	project := t.TempDir()
+	writeFile(t, project, ".ai/project.md", "# Shared\n")
+	writeFile(t, project, ".ai/mcp.yaml", "servers: {}\n")
+	writeFile(t, project, ".ai/plugins.yaml", "plugins:\n  small:\n    enabled: true\n    targets:\n      codex:\n        path: .ai/packages/small\n")
+	writeFile(t, project, ".ai/packages/small/plugin.json", `{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"small"}`)
+	out, err := app.Run(project, []string{"inventory", project})
+	if err != nil || !strings.Contains(out, `"status":"compatible"`) {
+		t.Fatalf("valid manifest rejected: %s %v", out, err)
+	}
+}
+
+func TestInventoryChecksMCPArgumentsAndWorkingDirectory(t *testing.T) {
+	project := t.TempDir()
+	writeFile(t, project, ".ai/project.md", "# Shared\n")
+	writeFile(t, project, ".ai/mcp.yaml", "servers: {}\n")
+	writeFile(t, project, ".ai/plugins.yaml", "plugins:\n  tool:\n    enabled: true\n    targets:\n      codex:\n        path: .ai/packages/tool\n")
+	writeFile(t, project, ".ai/packages/tool/plugin.json", `{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"tool"}`)
+	writeFile(t, project, ".ai/packages/tool/mcp.json", `{"$schema":"https://agent-plugins.org/schemas/1.0.0/mcp.schema.json","mcpServers":{"local":{"type":"stdio","command":"node","args":["./missing.js","${MISSING_ARG_TOKEN}"],"cwd":"./missing-dir"}}}`)
+	out, err := app.Run(project, []string{"inventory", project})
+	if err != nil || !strings.Contains(out, "MCP argument path: ./missing.js") || !strings.Contains(out, "MCP working directory: ./missing-dir") || !strings.Contains(out, "environment variable: MISSING_ARG_TOKEN") {
+		t.Fatalf("MCP requirements missing: %s %v", out, err)
+	}
+}
+
+func TestInventoryRejectsUnknownPortableMCPFields(t *testing.T) {
+	project := t.TempDir()
+	writeFile(t, project, ".ai/project.md", "# Shared\n")
+	writeFile(t, project, ".ai/mcp.yaml", "servers: {}\n")
+	writeFile(t, project, ".ai/plugins.yaml", "plugins:\n  tool:\n    enabled: true\n    targets:\n      codex:\n        path: .ai/packages/tool\n")
+	writeFile(t, project, ".ai/packages/tool/plugin.json", `{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"tool"}`)
+	writeFile(t, project, ".ai/packages/tool/mcp.json", `{"$schema":"https://agent-plugins.org/schemas/1.0.0/mcp.schema.json","mcpServers":{"local":{"type":"stdio","command":"node","unknown":true}}}`)
+	out, err := app.Run(project, []string{"inventory", project})
+	if err == nil || !strings.Contains(out, `unknown JSON field \"unknown\"`) {
+		t.Fatalf("unknown field accepted: %s %v", out, err)
+	}
+}
+
+func TestInventoryAttributesClaudeMCPAndReportsArgumentRequirements(t *testing.T) {
+	project := t.TempDir()
+	writeFile(t, project, ".ai/project.md", "# Shared\n")
+	writeFile(t, project, ".ai/mcp.yaml", "servers: {}\n")
+	writeFile(t, project, ".ai/plugins.yaml", "marketplaces:\n  tools:\n    repo: org/tools\nplugins:\n  kit:\n    enabled: true\n    targets:\n      claude:\n        install: kit@tools\n        path: .ai/packages/kit\n")
+	writeFile(t, project, ".ai/packages/kit/.claude-plugin/plugin.json", `{"name":"kit"}`)
+	writeFile(t, project, ".ai/packages/kit/.mcp.json", `{"mcpServers":{"local":{"command":"./bin/missing","args":["${MISSING_ARG_TOKEN}"]}}}`)
+	out, err := app.Run(project, []string{"inventory", project})
+	if err != nil || !strings.Contains(out, `"mcp_servers":["local"]`) || !strings.Contains(out, "environment variable: MISSING_ARG_TOKEN") || !strings.Contains(out, "MCP command path: ./bin/missing") {
+		t.Fatalf("Claude contributions missing: %s %v", out, err)
+	}
+}
+
+func TestInventoryDoesNotAssumePortableRootWorksInClaude(t *testing.T) {
+	project := t.TempDir()
+	writeFile(t, project, ".ai/project.md", "# Shared\n")
+	writeFile(t, project, ".ai/mcp.yaml", "servers: {}\n")
+	writeFile(t, project, ".ai/plugins.yaml", "marketplaces:\n  tools:\n    repo: org/tools\nplugins:\n  kit:\n    enabled: true\n    targets:\n      claude:\n        install: kit@tools\n        path: .ai/packages/kit\n")
+	writeFile(t, project, ".ai/packages/kit/plugin.json", `{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"kit"}`)
+	out, err := app.Run(project, []string{"inventory", project})
+	if err != nil || !strings.Contains(out, `"status":"incompatible"`) || !strings.Contains(out, "Claude-specific manifest unavailable") {
+		t.Fatalf("portable package falsely claimed Claude compatibility: %s %v", out, err)
+	}
+}
+
+func TestStructuredClaudePluginKeepsLegacyRenderAndInstall(t *testing.T) {
+	project := t.TempDir()
+	writeFile(t, project, ".ai/project.md", "# Shared\n")
+	writeFile(t, project, ".ai/mcp.yaml", "servers: {}\n")
+	writeFile(t, project, ".ai/plugins.yaml", "marketplaces:\n  tools:\n    repo: org/tools\nplugins:\n  toolkit:\n    enabled: true\n    targets:\n      claude:\n        install: toolkit@tools\n      codex:\n        git: https://example.com/toolkit.git\n        ref: 0123456789012345678901234567890123456789\n")
+	out, err := app.Run(project, []string{"list", "--target", "claude"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, ".claude/settings.json") {
+		t.Fatal(out)
+	}
+	settings, err := app.Run(project, []string{"--target", "claude", "--dry-run"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(settings, ".claude/settings.json") {
+		t.Fatal(settings)
+	}
+	install, err := app.Run(project, []string{"plugins", "--dry-run"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(install, "claude plugin install toolkit@tools") {
+		t.Fatal(install)
+	}
+}
+
 func decodeInventory(t *testing.T, out string) inventoryDocument {
 	t.Helper()
 	var doc inventoryDocument
