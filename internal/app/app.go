@@ -129,6 +129,9 @@ func installPlugins(workdir string, args []string) (string, error) {
 	if len(args) > 0 && args[0] == "preview" {
 		return previewPlugins(workdir, args[1:])
 	}
+	if len(args) > 0 && args[0] == "apply" {
+		return applyPlugins(workdir, args[1:])
+	}
 	var opts options
 	flags := flag.NewFlagSet("ai-sync plugins", flag.ContinueOnError)
 	var flagOutput bytes.Buffer
@@ -381,6 +384,7 @@ Usage:
   ai-sync inventory <project-dir>
   ai-sync plugins [--scope project|user|local] [--dry-run]
   ai-sync plugins preview <project-dir> --target codex|kiro
+  ai-sync plugins apply <project-dir> --target codex|kiro --fingerprint <fingerprint> (--all | --plugin <name>)
   ai-sync clean --dry-run
   ai-sync clean --force
   ai-sync version
@@ -390,7 +394,7 @@ Commands:
   convention        print the .ai authoring convention for humans or AI agents
   list              print generated file paths without writing files
   inventory         print a read-only JSON inventory of a project's .ai/
-  plugins           install Claude plugins or preview Codex/Kiro plugin actions
+  plugins           install Claude plugins, or preview and apply Codex/Kiro plugin actions
   clean             remove ai-sync generated files so the next sync starts fresh
   version           print version and build metadata
 
@@ -410,6 +414,7 @@ Examples:
   ai-sync plugins
   ai-sync plugins --dry-run
   ai-sync plugins preview . --target kiro
+  ai-sync plugins apply . --target kiro --fingerprint <fingerprint> --all
   ai-sync clean --dry-run
   ai-sync clean --force
   ai-sync version
