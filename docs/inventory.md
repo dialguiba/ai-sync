@@ -2,7 +2,7 @@
 
 Ejecuta `ai-sync inventory <project-dir>` para inspeccionar el `.ai/` de un proyecto explícito. La ruta puede ser absoluta o relativa al directorio desde el que se ejecuta el CLI. `inventory` solo lee archivos: no sincroniza, instala plugins ni ejecuta comandos de `setup.yaml`.
 
-La salida estándar contiene un documento JSON terminado en salto de línea. `resources` incluye instrucciones compartidas y por agente, reglas, agents, skills canónicas, servidores MCP y plugins declarados. Cada skill agrupa `SKILL.md` y sus archivos auxiliares en `sources`; `destinations` enumera las rutas generadas actualmente. Los archivos asociados a recursos no se repiten en `additional_files`. Los demás archivos de `.ai/` figuran allí hasta que se incorporen sus tipos de recurso. Las rutas de `sources`, `destinations`, `additional_files` y `diagnostics.path` son relativas al proyecto y usan `/`.
+La salida estándar contiene un documento JSON terminado en salto de línea. `resources` incluye instrucciones compartidas y por agente, reglas, agents, skills canónicas, servidores MCP, plugins declarados, eventos de hooks y entradas de setup. Cada skill agrupa `SKILL.md` y sus archivos auxiliares en `sources`; `destinations` enumera las rutas generadas actualmente. Los archivos asociados a recursos no se repiten en `additional_files`. Los demás archivos de `.ai/` figuran allí hasta que se incorporen sus tipos de recurso. Las rutas de `sources`, `destinations`, `additional_files` y `diagnostics.path` son relativas al proyecto y usan `/`.
 
 ```json
 {
@@ -34,7 +34,7 @@ La salida estándar contiene un documento JSON terminado en salto de línea. `re
       "enabled": false
     }
   ],
-  "additional_files": [".ai/setup.yaml"],
+  "additional_files": [],
   "diagnostics": []
 }
 ```
@@ -45,4 +45,6 @@ Cada skill aparece como un recurso con `SKILL.md` y archivos auxiliares. Sus des
 
 Los servidores MCP se ordenan por nombre y se transforman a los tres destinos. Los plugins se ordenan por identidad; `enabled` refleja exactamente el valor declarado, incluso `false`. El inventario no inspecciona paquetes de plugins, no verifica su instalación ni afirma compatibilidad en otros agentes. Los marketplaces y los valores compartidos de `env` no son recursos independientes de un plugin.
 
-`status` vale `ok`, `missing` o `invalid`. Si falta `.ai/`, el estado es `missing`. Una fuente requerida ausente o ilegible, un archivo canónico mal formado o una declaración inválida dejan el estado en `invalid`. Ambos estados producen un código de salida no exitoso y mantienen el documento JSON en stdout. Cada diagnóstico incluye la ruta afectada y la causa en `message`; una declaración MCP, de plugin o de marketplace inválida identifica además la unidad en `unit`. Los recursos siguen el orden instrucciones, reglas, agents, skills, servidores MCP y plugins; los archivos adicionales y diagnósticos se ordenan por ruta.
+Un evento de hooks tiene como destino `.claude/settings.json`. Una entrada de setup tiene `destinations: []`: sus comandos se usan durante la sincronización, pero no generan un archivo de destino. Un archivo con entradas válidas queda representado por sus recursos y no se repite en `additional_files`. El inventario nunca ejecuta los comandos declarados.
+
+`status` vale `ok`, `missing` o `invalid`. Si falta `.ai/`, el estado es `missing`. Una fuente requerida ausente o ilegible, un archivo canónico mal formado o una declaración inválida dejan el estado en `invalid`. Ambos estados producen un código de salida no exitoso y mantienen el documento JSON en stdout. Cada diagnóstico incluye la ruta afectada y la causa en `message`; una declaración MCP, de plugin o de marketplace inválida identifica además la unidad en `unit`. Los recursos siguen el orden instrucciones, reglas, agents, skills, servidores MCP, plugins, eventos de hooks y entradas de setup; los archivos adicionales y diagnósticos se ordenan por ruta.

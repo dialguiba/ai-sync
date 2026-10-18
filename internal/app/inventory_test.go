@@ -207,8 +207,8 @@ func TestInventoryReadsExplicitProjectWithoutWritingOrRunningSetup(t *testing.T)
 	if doc.Status != "ok" || len(doc.Diagnostics) != 0 {
 		t.Fatalf("unexpected inventory status: %+v", doc)
 	}
-	if len(doc.Resources) != 4 {
-		t.Fatalf("expected shared and three target instructions, got %+v", doc.Resources)
+	if len(doc.Resources) != 5 {
+		t.Fatalf("expected shared and three target instructions plus setup entry, got %+v", doc.Resources)
 	}
 	if got := doc.Resources[0]; got.Type != "shared_instruction" || got.Name != "project" || !reflect.DeepEqual(got.Sources, []string{".ai/project.md"}) || !reflect.DeepEqual(got.Destinations, []string{".kiro/steering/project-conventions.md", "AGENTS.md", "CLAUDE.md"}) {
 		t.Fatalf("unexpected shared instruction: %+v", got)
@@ -223,7 +223,10 @@ func TestInventoryReadsExplicitProjectWithoutWritingOrRunningSetup(t *testing.T)
 			t.Fatalf("unexpected target instruction: %+v", got)
 		}
 	}
-	if !reflect.DeepEqual(doc.AdditionalFiles, []string{".ai/notes.txt", ".ai/setup.yaml"}) {
+	if got := doc.Resources[4]; got.Type != "setup_entry" || got.Name != "probe" || !reflect.DeepEqual(got.Sources, []string{".ai/setup.yaml"}) || len(got.Destinations) != 0 {
+		t.Fatalf("unexpected setup entry: %+v", got)
+	}
+	if !reflect.DeepEqual(doc.AdditionalFiles, []string{".ai/notes.txt"}) {
 		t.Fatalf("unexpected additional files: %v", doc.AdditionalFiles)
 	}
 	if _, err := os.Stat(marker); !os.IsNotExist(err) {
@@ -503,5 +506,150 @@ func TestInventoryReportsMalformedAndUnreadableSkillFiles(t *testing.T) {
 	}
 	if !reflect.DeepEqual(doc.AdditionalFiles, []string{}) {
 		t.Fatalf("invalid skill files should remain owned by skills: %v", doc.AdditionalFiles)
+	}
+}
+
+func TestInventoryListsHookEventsAndNamedSetupEntriesWithoutExecutingCommands(t *testing.T) {
+	project := t.TempDir()
+	writeFile(t, project, ".ai/project.md", "# Shared\n")
+	markers := map[string]string{}
+	for _, name := range []string{"mcp", "session_hook", "edit_hook", "alpha_check", "alpha_install", "zeta_check", "zeta_install"} {
+		markers[name] = filepath.Join(project, name+"-ran")
+	}
+	writeFile(t, project, ".ai/mcp.yaml", "servers:\n  marker:\n    command: touch\n    args: ['"+markers["mcp"]+"']\n")
+	writeFile(t, project, ".ai/hooks.yaml", "SessionStart:\n  - hooks:\n      - type: command\n        command: 'touch "+markers["session_hook"]+"'\nPostEdit:\n  - matcher: Write\n    hooks:\n      - type: command\n        command: 'touch "+markers["edit_hook"]+"'\n")
+	writeFile(t, project, ".ai/setup.yaml", "zeta:\n  check: 'touch "+markers["zeta_check"]+"'\n  install: 'touch "+markers["zeta_install"]+"'\nalpha:\n  check: 'touch "+markers["alpha_check"]+"'\n  install: 'touch "+markers["alpha_install"]+"'\n")
+	before := snapshotProject(t, project)
+
+	out, err := app.Run(t.TempDir(), []string{"inventory", project})
+	if err != nil {
+		t.Fatalf("inventory failed: %v", err)
+	}
+	doc := decodeInventory(t, out)
+	if doc.Status != "ok" || len(doc.Diagnostics) != 0 || len(doc.Resources) != 6 {
+		t.Fatalf("unexpected inventory: %+v", doc)
+	}
+	if got := doc.Resources[1]; got.Type != "mcp_server" || got.Name != "marker" {
+		t.Fatalf("unexpected MCP resource: %+v", got)
+	}
+	for i, want := range []struct {
+		kind, name, source string
+		destinations       []string
+	}{
+		{"hook_event", "PostEdit", ".ai/hooks.yaml", []string{".claude/settings.json"}},
+		{"hook_event", "SessionStart", ".ai/hooks.yaml", []string{".claude/settings.json"}},
+		{"setup_entry", "alpha", ".ai/setup.yaml", []string{}},
+		{"setup_entry", "zeta", ".ai/setup.yaml", []string{}},
+	} {
+		got := doc.Resources[i+2]
+		if got.Type != want.kind || got.Name != want.name || !reflect.DeepEqual(got.Sources, []string{want.source}) || !reflect.DeepEqual(got.Destinations, want.destinations) {
+			t.Fatalf("resource %d: %+v", i+2, got)
+		}
+	}
+	if !reflect.DeepEqual(doc.AdditionalFiles, []string{}) {
+		t.Fatalf("unexpected additional files: %v", doc.AdditionalFiles)
+	}
+	for name, marker := range markers {
+		if _, err := os.Stat(marker); !os.IsNotExist(err) {
+			t.Fatalf("inventory executed %s command: %v", name, err)
+		}
+	}
+	if after := snapshotProject(t, project); !reflect.DeepEqual(after, before) {
+		t.Fatalf("inventory changed project tree:\nbefore: %v\nafter: %v", before, after)
+	}
+}
+
+func snapshotProject(t *testing.T, project string) map[string]string {
+	t.Helper()
+	files := map[string]string{}
+	err := filepath.WalkDir(project, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(project, path)
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			files[rel] = "directory"
+			return nil
+		}
+		contents, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		files[rel] = string(contents)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("snapshot project: %v", err)
+	}
+	return files
+}
+
+func TestInventoryReportsMalformedHooksYAMLAndKeepsSetupEntries(t *testing.T) {
+	project := t.TempDir()
+	writeFile(t, project, ".ai/project.md", "# Shared\n")
+	writeFile(t, project, ".ai/mcp.yaml", "servers: {}\n")
+	writeFile(t, project, ".ai/hooks.yaml", "SessionStart: [\n")
+	writeFile(t, project, ".ai/setup.yaml", "tool:\n  check: echo ready\n  install: echo install\n")
+
+	out, err := app.Run(t.TempDir(), []string{"inventory", project})
+	if err == nil {
+		t.Fatal("malformed hooks YAML should fail")
+	}
+	doc := decodeInventory(t, out)
+	if doc.Status != "invalid" || len(doc.Resources) != 2 || doc.Resources[1].Type != "setup_entry" || doc.Resources[1].Name != "tool" || len(doc.Diagnostics) != 1 || doc.Diagnostics[0].Path != ".ai/hooks.yaml" || !strings.Contains(doc.Diagnostics[0].Message, "yaml") {
+		t.Fatalf("unexpected malformed hooks inventory: %+v", doc)
+	}
+}
+
+func TestInventoryRejectsDuplicateSetupNames(t *testing.T) {
+	project := t.TempDir()
+	writeFile(t, project, ".ai/project.md", "# Shared\n")
+	writeFile(t, project, ".ai/mcp.yaml", "servers: {}\n")
+	writeFile(t, project, ".ai/setup.yaml", "tool:\n  check: echo one\n  install: echo one\ntool:\n  check: echo two\n  install: echo two\n")
+
+	out, err := app.Run(t.TempDir(), []string{"inventory", project})
+	if err == nil {
+		t.Fatal("duplicate setup names should fail")
+	}
+	doc := decodeInventory(t, out)
+	if doc.Status != "invalid" || len(doc.Diagnostics) != 1 || doc.Diagnostics[0].Path != ".ai/setup.yaml" || !strings.Contains(doc.Diagnostics[0].Message, "tool") || !strings.Contains(doc.Diagnostics[0].Message, "duplicate") {
+		t.Fatalf("unexpected duplicate setup diagnostic: %+v", doc)
+	}
+}
+
+func TestInventoryReportsInvalidNamedEntriesAndKeepsValidNeighbors(t *testing.T) {
+	project := t.TempDir()
+	writeFile(t, project, ".ai/project.md", "# Shared\n")
+	writeFile(t, project, ".ai/mcp.yaml", "servers: {}\n")
+	writeFile(t, project, ".ai/hooks.yaml", "Broken:\n  - matcher: Write\nGood:\n  - hooks:\n      - type: command\n        command: echo safe\n")
+	writeFile(t, project, ".ai/setup.yaml", "broken:\n  check: true\ngood:\n  check: echo safe\n  install: echo safe\n")
+
+	out, err := app.Run(t.TempDir(), []string{"inventory", project})
+	if err == nil {
+		t.Fatal("invalid declarations should fail")
+	}
+	doc := decodeInventory(t, out)
+	if doc.Status != "invalid" || len(doc.Resources) != 3 || len(doc.Diagnostics) != 2 {
+		t.Fatalf("unexpected inventory: %+v", doc)
+	}
+	if doc.Resources[1].Type != "hook_event" || doc.Resources[1].Name != "Good" || doc.Resources[2].Type != "setup_entry" || doc.Resources[2].Name != "good" {
+		t.Fatalf("valid neighboring entries were hidden: %+v", doc.Resources)
+	}
+	for _, want := range []struct{ path, name, cause string }{
+		{".ai/hooks.yaml", "Broken", "needs at least one hook"},
+		{".ai/setup.yaml", "broken", "needs a check and an install"},
+	} {
+		found := false
+		for _, diagnostic := range doc.Diagnostics {
+			if diagnostic.Path == want.path && strings.Contains(diagnostic.Message, want.name) && strings.Contains(diagnostic.Message, want.cause) {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("missing actionable diagnostic for %s: %+v", want.name, doc.Diagnostics)
+		}
 	}
 }

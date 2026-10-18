@@ -152,8 +152,19 @@ func inventoryProject(workdir string, args []string) (string, error) {
 	} else if !os.IsNotExist(err) {
 		result.Diagnostics = append(result.Diagnostics, inventoryDiagnostic{Path: pluginsPath, Message: inventoryCause(err)})
 	}
-	canonicalYAML := map[string]bool{
-		".ai/hooks.yaml": true, ".ai/setup.yaml": true,
+	for _, declaration := range []struct {
+		path, kind   string
+		destinations []string
+	}{
+		{".ai/hooks.yaml", "hook_event", []string{".claude/settings.json"}},
+		{".ai/setup.yaml", "setup_entry", []string{}},
+	} {
+		resources, diagnostics := inventoryNamedYAML(project, declaration.path, declaration.kind, declaration.destinations)
+		result.Resources = append(result.Resources, resources...)
+		result.Diagnostics = append(result.Diagnostics, diagnostics...)
+		if len(resources) > 0 {
+			known[declaration.path] = true
+		}
 	}
 	if err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
 		rel, relErr := filepath.Rel(project, path)
@@ -171,17 +182,7 @@ func inventoryProject(workdir string, args []string) (string, error) {
 		if !known[rel] {
 			result.AdditionalFiles = append(result.AdditionalFiles, rel)
 		}
-		if canonicalYAML[rel] {
-			contents, err := os.ReadFile(path)
-			if err != nil {
-				result.Diagnostics = append(result.Diagnostics, inventoryDiagnostic{Path: rel, Message: inventoryCause(err)})
-			} else {
-				var data any
-				if err := yaml.Unmarshal(contents, &data); err != nil {
-					result.Diagnostics = append(result.Diagnostics, inventoryDiagnostic{Path: rel, Message: err.Error()})
-				}
-			}
-		}
+
 		return nil
 	}); err != nil {
 		result.Diagnostics = append(result.Diagnostics, inventoryDiagnostic{Path: ".ai", Message: inventoryCause(err)})
@@ -358,6 +359,72 @@ func validateInventorySkill(contents []byte) error {
 		return errors.New("YAML frontmatter needs name and description")
 	}
 	return nil
+}
+
+func inventoryNamedYAML(project, source, kind string, destinations []string) ([]inventoryResource, []inventoryDiagnostic) {
+	contents, err := os.ReadFile(filepath.Join(project, filepath.FromSlash(source)))
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, []inventoryDiagnostic{{Path: source, Message: inventoryCause(err)}}
+	}
+	var document yaml.Node
+	if err := yaml.Unmarshal(contents, &document); err != nil {
+		return nil, []inventoryDiagnostic{{Path: source, Message: err.Error()}}
+	}
+	if len(document.Content) == 0 || document.Content[0].Tag == "!!null" {
+		return nil, nil
+	}
+	root := document.Content[0]
+	if root.Kind != yaml.MappingNode {
+		return nil, []inventoryDiagnostic{{Path: source, Message: "expected a mapping of named entries"}}
+	}
+	var resources []inventoryResource
+	var diagnostics []inventoryDiagnostic
+	seen := map[string]bool{}
+	for i := 0; i < len(root.Content); i += 2 {
+		nameNode, value := root.Content[i], root.Content[i+1]
+		name := nameNode.Value
+		if nameNode.Kind != yaml.ScalarNode || nameNode.Tag != "!!str" || strings.TrimSpace(name) == "" {
+			diagnostics = append(diagnostics, inventoryDiagnostic{Path: source, Message: fmt.Sprintf("%s %q: expected a non-empty name", kind, name)})
+			continue
+		}
+		if seen[name] {
+			diagnostics = append(diagnostics, inventoryDiagnostic{Path: source, Message: fmt.Sprintf("%s %q: duplicate name", kind, name)})
+			continue
+		}
+		seen[name] = true
+		var entryErr error
+		switch kind {
+		case "hook_event":
+			var matchers []hookMatcher
+			entryErr = value.Decode(&matchers)
+			if entryErr == nil && len(matchers) == 0 {
+				entryErr = errors.New("needs at least one matcher with hooks")
+			}
+			for index, matcher := range matchers {
+				if entryErr == nil {
+					entryErr = validateHookMatcher(name, index, matcher)
+				}
+			}
+		case "setup_entry":
+			var entry setupEntry
+			entryErr = value.Decode(&entry)
+			if entryErr == nil && (entry.Check == "" || entry.Install == "") {
+				entryErr = errors.New("needs a check and an install command")
+			}
+		default:
+			entryErr = fmt.Errorf("unsupported inventory resource type %q", kind)
+		}
+		if entryErr != nil {
+			diagnostics = append(diagnostics, inventoryDiagnostic{Path: source, Message: fmt.Sprintf("%s %q: %v", kind, name, entryErr)})
+			continue
+		}
+		resources = append(resources, inventoryResource{Type: kind, Name: name, Sources: []string{source}, Destinations: destinations})
+	}
+	sort.Slice(resources, func(i, j int) bool { return resources[i].Name < resources[j].Name })
+	return resources, diagnostics
 }
 
 func encodeInventory(result inventoryResult) (string, error) {
