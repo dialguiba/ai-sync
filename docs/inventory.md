@@ -2,7 +2,7 @@
 
 Ejecuta `ai-sync inventory <project-dir>` para inspeccionar el `.ai/` de un proyecto explícito. La ruta puede ser absoluta o relativa al directorio desde el que se ejecuta el CLI. `inventory` solo lee archivos: no sincroniza, instala plugins ni ejecuta comandos de `setup.yaml`.
 
-La salida estándar contiene un documento JSON terminado en salto de línea. `resources` incluye las instrucciones compartidas y por agente, cada regla válida, cada agent canónico y cada carpeta de skill como un recurso `skill`. Cada skill agrupa `SKILL.md` y sus archivos auxiliares en `sources`; `destinations` enumera sus rutas generadas para Claude, Codex, Kiro Skills y Kiro Powers. Los archivos de recursos no se repiten en `additional_files`. Los demás archivos de `.ai/` figuran allí hasta que se incorporen sus tipos de recurso. Las rutas de `sources`, `destinations`, `additional_files` y `diagnostics.path` son relativas al proyecto y usan `/`.
+La salida estándar contiene un documento JSON terminado en salto de línea. `resources` incluye instrucciones compartidas y por agente, reglas, agents, skills canónicas, servidores MCP y plugins declarados. Cada skill agrupa `SKILL.md` y sus archivos auxiliares en `sources`; `destinations` enumera las rutas generadas actualmente. Los archivos asociados a recursos no se repiten en `additional_files`. Los demás archivos de `.ai/` figuran allí hasta que se incorporen sus tipos de recurso. Las rutas de `sources`, `destinations`, `additional_files` y `diagnostics.path` son relativas al proyecto y usan `/`.
 
 ```json
 {
@@ -19,6 +19,19 @@ La salida estándar contiene un documento JSON terminado en salto de línea. `re
       "name": "codex",
       "sources": [".ai/targets/codex.md"],
       "destinations": ["AGENTS.md"]
+    },
+    {
+      "type": "mcp_server",
+      "name": "playwright",
+      "sources": [".ai/mcp.yaml"],
+      "destinations": [".codex/config.toml", ".kiro/settings/mcp.json", ".mcp.json"]
+    },
+    {
+      "type": "plugin",
+      "name": "formatter@tools",
+      "sources": [".ai/plugins.yaml"],
+      "destinations": [".claude/settings.json"],
+      "enabled": false
     }
   ],
   "additional_files": [".ai/setup.yaml"],
@@ -26,8 +39,10 @@ La salida estándar contiene un documento JSON terminado en salto de línea. `re
 }
 ```
 
-Cada regla aparece una vez como `path_rule`, con el nombre tomado del archivo sin `.md`. Sus destinos incluyen `.claude/rules/<name>.md`, `.kiro/steering/<name>.md` y los archivos `AGENTS.md` que Codex genera para los globs de `paths`. Un glob sin prefijo de directorio estable apunta al `AGENTS.md` raíz; varios globs que apuntan al mismo archivo producen un solo destino. Cada `.ai/agents/<name>.md` aparece una vez como `agent` y apunta a `.claude/agents/<name>.md`, su destino actual.
+Cada regla aparece una vez como `path_rule`, con el nombre tomado del archivo sin `.md`. Sus destinos incluyen las reglas de Claude y Kiro y los archivos `AGENTS.md` que Codex genera para los globs de `paths`. Cada agent aparece una vez y apunta a su destino de Claude. Una regla mal formada deja `status` en `invalid`; la regla permanece en `additional_files` y los demás recursos legibles siguen visibles.
 
-Una regla con YAML, lista `paths` o delimitadores de frontmatter mal formados deja `status` en `invalid`. Su diagnóstico señala la fuente y explica la causa. La regla inválida permanece en `additional_files`; las demás reglas, agents e instrucciones legibles siguen visibles en `resources`.
+Cada skill aparece como un recurso con `SKILL.md` y archivos auxiliares. Sus destinos incluyen Claude, Codex, Kiro Skills y Kiro Powers. Para el inventario, `SKILL.md` debe tener frontmatter YAML con `name` y `description` no vacíos. Esta validación es más estricta que la copia de archivos del comando de sincronización. Una skill sin `SKILL.md` sigue visible como recurso inválido, junto con los demás recursos legibles.
 
-`status` vale `ok`, `missing` o `invalid`. Si falta `.ai/`, el estado es `missing`. Si `.ai/` existe pero falta una fuente requerida, una instrucción presente no se puede leer, una regla está mal formada, hay YAML mal formado en un archivo canónico o una skill carece de `SKILL.md` válido, el estado es `invalid`. Para el inventario, `SKILL.md` debe tener frontmatter YAML con `name` y `description` no vacíos. Esta validación del inventario es más estricta que la copia de archivos del comando de sincronización. Un archivo ilegible dentro de una skill también se diagnostica. Ambos estados producen un código de salida no exitoso y mantienen el documento JSON en stdout; cada diagnóstico incluye la ruta afectada y la causa en `message`. Los demás recursos siguen visibles aunque uno sea inválido. Los recursos siguen el orden instrucciones, reglas por nombre, agents por nombre y skills por nombre; los archivos adicionales y diagnósticos se ordenan por ruta.
+Los servidores MCP se ordenan por nombre y se transforman a los tres destinos. Los plugins se ordenan por identidad; `enabled` refleja exactamente el valor declarado, incluso `false`. El inventario no inspecciona paquetes de plugins, no verifica su instalación ni afirma compatibilidad en otros agentes. Los marketplaces y los valores compartidos de `env` no son recursos independientes de un plugin.
+
+`status` vale `ok`, `missing` o `invalid`. Si falta `.ai/`, el estado es `missing`. Una fuente requerida ausente o ilegible, un archivo canónico mal formado o una declaración inválida dejan el estado en `invalid`. Ambos estados producen un código de salida no exitoso y mantienen el documento JSON en stdout. Cada diagnóstico incluye la ruta afectada y la causa en `message`; una declaración MCP, de plugin o de marketplace inválida identifica además la unidad en `unit`. Los recursos siguen el orden instrucciones, reglas, agents, skills, servidores MCP y plugins; los archivos adicionales y diagnósticos se ordenan por ruta.

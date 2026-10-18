@@ -18,12 +18,150 @@ type inventoryDocument struct {
 		Name         string   `json:"name"`
 		Sources      []string `json:"sources"`
 		Destinations []string `json:"destinations"`
+		Enabled      *bool    `json:"enabled"`
 	} `json:"resources"`
 	AdditionalFiles []string `json:"additional_files"`
 	Diagnostics     []struct {
 		Path    string `json:"path"`
+		Unit    string `json:"unit"`
 		Message string `json:"message"`
 	} `json:"diagnostics"`
+}
+
+func TestInventoryReportsInvalidMCPDeclarationWithServerName(t *testing.T) {
+	project := t.TempDir()
+	writeFile(t, project, ".ai/project.md", "# Shared\n")
+	writeFile(t, project, ".ai/mcp.yaml", "servers:\n  broken:\n    args: ['--verbose']\n")
+
+	out, err := app.Run(t.TempDir(), []string{"inventory", project})
+	if err == nil {
+		t.Fatal("invalid MCP declaration should fail")
+	}
+	doc := decodeInventory(t, out)
+	if doc.Status != "invalid" || len(doc.Diagnostics) != 1 || doc.Diagnostics[0].Path != ".ai/mcp.yaml" || doc.Diagnostics[0].Unit != "broken" || !strings.Contains(doc.Diagnostics[0].Message, "command") {
+		t.Fatalf("unexpected MCP diagnostic: %+v", doc)
+	}
+}
+
+func TestInventoryReportsInvalidPluginDeclarationWithIdentity(t *testing.T) {
+	project := t.TempDir()
+	writeFile(t, project, ".ai/project.md", "# Shared\n")
+	writeFile(t, project, ".ai/mcp.yaml", "servers: {}\n")
+	writeFile(t, project, ".ai/plugins.yaml", "plugins:\n  malformed: true\n")
+
+	out, err := app.Run(t.TempDir(), []string{"inventory", project})
+	if err == nil {
+		t.Fatal("invalid plugin declaration should fail")
+	}
+	doc := decodeInventory(t, out)
+	if doc.Status != "invalid" || len(doc.Diagnostics) != 1 || doc.Diagnostics[0].Path != ".ai/plugins.yaml" || doc.Diagnostics[0].Unit != "malformed" || !strings.Contains(doc.Diagnostics[0].Message, "<plugin>@<marketplace>") {
+		t.Fatalf("unexpected plugin diagnostic: %+v", doc)
+	}
+}
+
+func TestInventoryReportsBadMCPAndPluginYAMLOncePerSource(t *testing.T) {
+	project := t.TempDir()
+	writeFile(t, project, ".ai/project.md", "# Shared\n")
+	writeFile(t, project, ".ai/mcp.yaml", "servers: [\n")
+	writeFile(t, project, ".ai/plugins.yaml", "plugins: [\n")
+
+	out, err := app.Run(t.TempDir(), []string{"inventory", project})
+	if err == nil {
+		t.Fatal("malformed canonical YAML should fail")
+	}
+	doc := decodeInventory(t, out)
+	if doc.Status != "invalid" || len(doc.Diagnostics) != 2 {
+		t.Fatalf("unexpected diagnostics: %+v", doc.Diagnostics)
+	}
+	for i, want := range []string{".ai/mcp.yaml", ".ai/plugins.yaml"} {
+		if got := doc.Diagnostics[i]; got.Path != want || got.Unit != "" || !strings.Contains(got.Message, "yaml") {
+			t.Fatalf("unexpected YAML diagnostic: %+v", got)
+		}
+	}
+}
+
+func TestInventoryReportsInvalidMarketplaceWithoutInventingAResource(t *testing.T) {
+	project := t.TempDir()
+	writeFile(t, project, ".ai/project.md", "# Shared\n")
+	writeFile(t, project, ".ai/mcp.yaml", "servers: {}\n")
+	writeFile(t, project, ".ai/plugins.yaml", "marketplaces:\n  tools:\n    source: github\nplugins:\n  formatter@tools: false\n")
+
+	out, err := app.Run(t.TempDir(), []string{"inventory", project})
+	if err == nil {
+		t.Fatal("invalid marketplace should fail")
+	}
+	doc := decodeInventory(t, out)
+	if doc.Status != "invalid" || len(doc.Diagnostics) != 1 || doc.Diagnostics[0].Path != ".ai/plugins.yaml" || doc.Diagnostics[0].Unit != "tools" || !strings.Contains(doc.Diagnostics[0].Message, "repo") {
+		t.Fatalf("unexpected marketplace diagnostic: %+v", doc)
+	}
+	if len(doc.Resources) != 2 || doc.Resources[1].Type != "plugin" || doc.Resources[1].Name != "formatter@tools" {
+		t.Fatalf("marketplace should not be a separate resource: %+v", doc.Resources)
+	}
+}
+
+func TestInventoryListsNamedMCPServersWithoutRunningThem(t *testing.T) {
+	project := t.TempDir()
+	writeFile(t, project, ".ai/project.md", "# Shared\n")
+	writeFile(t, project, ".ai/mcp.yaml", "servers:\n  zeta:\n    command: sh\n    args: ['-c', 'touch "+filepath.Join(project, "mcp-ran")+"']\n  alpha:\n    command: npx\n")
+
+	out, err := app.Run(t.TempDir(), []string{"inventory", project})
+	if err != nil {
+		t.Fatalf("inventory failed: %v", err)
+	}
+	doc := decodeInventory(t, out)
+	if doc.Status != "ok" || len(doc.Resources) != 3 {
+		t.Fatalf("unexpected inventory: %+v", doc)
+	}
+	for i, name := range []string{"alpha", "zeta"} {
+		got := doc.Resources[i+1]
+		if got.Type != "mcp_server" || got.Name != name || !reflect.DeepEqual(got.Sources, []string{".ai/mcp.yaml"}) || !reflect.DeepEqual(got.Destinations, []string{".codex/config.toml", ".kiro/settings/mcp.json", ".mcp.json"}) {
+			t.Fatalf("unexpected MCP resource: %+v", got)
+		}
+	}
+	if !reflect.DeepEqual(doc.AdditionalFiles, []string{}) {
+		t.Fatalf("recognized MCP source remains additional: %v", doc.AdditionalFiles)
+	}
+	if _, err := os.Stat(filepath.Join(project, "mcp-ran")); !os.IsNotExist(err) {
+		t.Fatalf("inventory ran MCP command: %v", err)
+	}
+}
+
+func TestInventoryListsDeclaredPluginsIncludingDisabledWithoutInstalling(t *testing.T) {
+	project := t.TempDir()
+	writeFile(t, project, ".ai/project.md", "# Shared\n")
+	writeFile(t, project, ".ai/mcp.yaml", "servers: {}\n")
+	writeFile(t, project, ".ai/plugins.yaml", "marketplaces:\n  tools:\n    repo: org/tools\nplugins:\n  zeta@tools: false\n  alpha@tools: true\nenv:\n  SHARED_TOKEN: example\n")
+	bin := t.TempDir()
+	marker := filepath.Join(project, "install-ran")
+	writeFile(t, bin, "claude", "#!/bin/sh\ntouch "+marker+"\n")
+	if err := os.Chmod(filepath.Join(bin, "claude"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	out, err := app.Run(t.TempDir(), []string{"inventory", project})
+	if err != nil {
+		t.Fatalf("inventory failed: %v", err)
+	}
+	doc := decodeInventory(t, out)
+	if doc.Status != "ok" || len(doc.Resources) != 3 {
+		t.Fatalf("unexpected inventory: %+v", doc)
+	}
+	for i, want := range []struct {
+		name    string
+		enabled bool
+	}{{"alpha@tools", true}, {"zeta@tools", false}} {
+		got := doc.Resources[i+1]
+		if got.Type != "plugin" || got.Name != want.name || got.Enabled == nil || *got.Enabled != want.enabled || !reflect.DeepEqual(got.Sources, []string{".ai/plugins.yaml"}) || !reflect.DeepEqual(got.Destinations, []string{".claude/settings.json"}) {
+			t.Fatalf("unexpected plugin resource: %+v", got)
+		}
+	}
+	if len(doc.AdditionalFiles) != 0 {
+		t.Fatalf("plugin marketplace or env inventoried as additional: %v", doc.AdditionalFiles)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("inventory ran plugin installer: %v", err)
+	}
 }
 
 func decodeInventory(t *testing.T, out string) inventoryDocument {
@@ -85,7 +223,7 @@ func TestInventoryReadsExplicitProjectWithoutWritingOrRunningSetup(t *testing.T)
 			t.Fatalf("unexpected target instruction: %+v", got)
 		}
 	}
-	if !reflect.DeepEqual(doc.AdditionalFiles, []string{".ai/mcp.yaml", ".ai/notes.txt", ".ai/setup.yaml"}) {
+	if !reflect.DeepEqual(doc.AdditionalFiles, []string{".ai/notes.txt", ".ai/setup.yaml"}) {
 		t.Fatalf("unexpected additional files: %v", doc.AdditionalFiles)
 	}
 	if _, err := os.Stat(marker); !os.IsNotExist(err) {
@@ -132,7 +270,7 @@ func TestInventoryIncludesPathRulesAndCanonicalAgents(t *testing.T) {
 			t.Fatalf("resource %d: got %+v, want %+v", i+1, got, want)
 		}
 	}
-	if !reflect.DeepEqual(doc.AdditionalFiles, []string{".ai/mcp.yaml"}) {
+	if !reflect.DeepEqual(doc.AdditionalFiles, []string{}) {
 		t.Fatalf("classified files leaked into additional_files: %v", doc.AdditionalFiles)
 	}
 	if after := snapshotProjectTree(t, project); !reflect.DeepEqual(after, before) {
@@ -170,7 +308,7 @@ func TestInventoryReportsMalformedRulesAndKeepsReadableResources(t *testing.T) {
 			if doc.Resources[1].Name != "good" || doc.Resources[2].Name != "reviewer" {
 				t.Fatalf("readable neighbors disappeared: %+v", doc.Resources)
 			}
-			if !reflect.DeepEqual(doc.AdditionalFiles, []string{".ai/mcp.yaml", ".ai/rules/broken.md"}) {
+			if !reflect.DeepEqual(doc.AdditionalFiles, []string{".ai/rules/broken.md"}) {
 				t.Fatalf("unexpected additional files: %v", doc.AdditionalFiles)
 			}
 			if after := snapshotProjectTree(t, project); !reflect.DeepEqual(after, before) {
@@ -294,7 +432,7 @@ func TestInventoryGroupsSkillAndAuxiliaryFiles(t *testing.T) {
 	}) {
 		t.Fatalf("unexpected skill resource: %+v", skill)
 	}
-	if !reflect.DeepEqual(doc.AdditionalFiles, []string{".ai/mcp.yaml", ".ai/notes.txt"}) {
+	if !reflect.DeepEqual(doc.AdditionalFiles, []string{".ai/notes.txt"}) {
 		t.Fatalf("skill files should not be additional: %v", doc.AdditionalFiles)
 	}
 	if _, err := os.Stat(filepath.Join(project, ".agents")); !os.IsNotExist(err) {
@@ -328,7 +466,7 @@ func TestInventoryReportsSkillWithoutSkillFileAndKeepsOtherResources(t *testing.
 	}) {
 		t.Fatalf("invalid skill should include current Kiro Power destination: %+v", doc.Resources[2])
 	}
-	if !reflect.DeepEqual(doc.AdditionalFiles, []string{".ai/mcp.yaml"}) {
+	if !reflect.DeepEqual(doc.AdditionalFiles, []string{}) {
 		t.Fatalf("skill auxiliary should belong to invalid skill: %v", doc.AdditionalFiles)
 	}
 	if _, err := os.Stat(filepath.Join(project, ".agents")); !os.IsNotExist(err) {
@@ -363,7 +501,7 @@ func TestInventoryReportsMalformedAndUnreadableSkillFiles(t *testing.T) {
 	if doc.Diagnostics[1].Path != ".ai/skills/unreadable/SKILL.md" || !strings.Contains(doc.Diagnostics[1].Message, "not found") {
 		t.Fatalf("unreadable skill needs path and cause: %+v", doc.Diagnostics)
 	}
-	if !reflect.DeepEqual(doc.AdditionalFiles, []string{".ai/mcp.yaml"}) {
+	if !reflect.DeepEqual(doc.AdditionalFiles, []string{}) {
 		t.Fatalf("invalid skill files should remain owned by skills: %v", doc.AdditionalFiles)
 	}
 }

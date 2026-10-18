@@ -18,10 +18,12 @@ type inventoryResource struct {
 	Name         string   `json:"name"`
 	Sources      []string `json:"sources"`
 	Destinations []string `json:"destinations"`
+	Enabled      *bool    `json:"enabled,omitempty"`
 }
 
 type inventoryDiagnostic struct {
 	Path    string `json:"path"`
+	Unit    string `json:"unit,omitempty"`
 	Message string `json:"message"`
 }
 
@@ -98,11 +100,59 @@ func inventoryProject(workdir string, args []string) (string, error) {
 	result.Resources = append(result.Resources, inventoryPathRules(root, known, &result.Diagnostics)...)
 	result.Resources = append(result.Resources, inventoryAgents(root, known, &result.Diagnostics)...)
 	inventorySkills(project, &result, known)
-	if _, err := os.ReadFile(filepath.Join(root, "mcp.yaml")); err != nil {
-		result.Diagnostics = append(result.Diagnostics, inventoryDiagnostic{Path: ".ai/mcp.yaml", Message: inventoryCause(err)})
+	mcpPath := ".ai/mcp.yaml"
+	if contents, err := os.ReadFile(filepath.Join(root, "mcp.yaml")); err != nil {
+		result.Diagnostics = append(result.Diagnostics, inventoryDiagnostic{Path: mcpPath, Message: inventoryCause(err)})
+	} else {
+		var config mcpConfig
+		if err := yaml.Unmarshal(contents, &config); err != nil {
+			result.Diagnostics = append(result.Diagnostics, inventoryDiagnostic{Path: mcpPath, Message: err.Error()})
+		} else {
+			known[mcpPath] = true
+			for _, name := range sortedServerNames(config.Servers) {
+				if strings.TrimSpace(name) == "" {
+					result.Diagnostics = append(result.Diagnostics, inventoryDiagnostic{Path: mcpPath, Unit: name, Message: "server name must not be empty"})
+					continue
+				}
+				if strings.TrimSpace(config.Servers[name].Command) == "" {
+					result.Diagnostics = append(result.Diagnostics, inventoryDiagnostic{Path: mcpPath, Unit: name, Message: "server command must not be empty"})
+					continue
+				}
+				result.Resources = append(result.Resources, inventoryResource{
+					Type: "mcp_server", Name: name, Sources: []string{mcpPath},
+					Destinations: []string{".codex/config.toml", ".kiro/settings/mcp.json", ".mcp.json"},
+				})
+			}
+		}
+	}
+	pluginsPath := ".ai/plugins.yaml"
+	if contents, err := os.ReadFile(filepath.Join(root, "plugins.yaml")); err == nil {
+		var config pluginConfig
+		if err := yaml.Unmarshal(contents, &config); err != nil {
+			result.Diagnostics = append(result.Diagnostics, inventoryDiagnostic{Path: pluginsPath, Message: err.Error()})
+		} else {
+			known[pluginsPath] = true
+			for _, name := range sortedStringMapKeys(config.Marketplaces) {
+				if err := validateMarketplace(name, config.Marketplaces[name]); err != nil {
+					result.Diagnostics = append(result.Diagnostics, inventoryDiagnostic{Path: pluginsPath, Unit: name, Message: err.Error()})
+				}
+			}
+			for _, name := range sortedStringMapKeys(config.Plugins) {
+				if err := validatePluginKey(name); err != nil {
+					result.Diagnostics = append(result.Diagnostics, inventoryDiagnostic{Path: pluginsPath, Unit: name, Message: err.Error()})
+					continue
+				}
+				enabled := config.Plugins[name]
+				result.Resources = append(result.Resources, inventoryResource{
+					Type: "plugin", Name: name, Sources: []string{pluginsPath},
+					Destinations: []string{".claude/settings.json"}, Enabled: &enabled,
+				})
+			}
+		}
+	} else if !os.IsNotExist(err) {
+		result.Diagnostics = append(result.Diagnostics, inventoryDiagnostic{Path: pluginsPath, Message: inventoryCause(err)})
 	}
 	canonicalYAML := map[string]bool{
-		".ai/mcp.yaml": true, ".ai/plugins.yaml": true,
 		".ai/hooks.yaml": true, ".ai/setup.yaml": true,
 	}
 	if err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
