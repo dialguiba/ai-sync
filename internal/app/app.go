@@ -45,6 +45,9 @@ func RunWithBuildInfo(workdir string, args []string, build BuildInfo) (string, e
 	if len(args) > 0 && args[0] == "list" {
 		return listGeneratedFiles(workdir, args[1:])
 	}
+	if len(args) > 0 && args[0] == "inventory" {
+		return inventoryProject(workdir, args[1:])
+	}
 	if len(args) > 0 && args[0] == "plugins" {
 		return installPlugins(workdir, args[1:])
 	}
@@ -369,6 +372,7 @@ Usage:
   ai-sync init
   ai-sync convention
   ai-sync list
+  ai-sync inventory <project-dir>
   ai-sync plugins [--scope project|user|local] [--dry-run]
   ai-sync clean --dry-run
   ai-sync clean --force
@@ -378,6 +382,7 @@ Commands:
   init              scaffold a starter .ai/ directory
   convention        print the .ai authoring convention for humans or AI agents
   list              print generated file paths without writing files
+  inventory         print a read-only JSON inventory of a project's .ai/
   plugins           install the Claude Code plugins declared in .ai/plugins.yaml
   clean             remove ai-sync generated files so the next sync starts fresh
   version           print version and build metadata
@@ -394,6 +399,7 @@ Examples:
   ai-sync init
   ai-sync convention
   ai-sync list
+  ai-sync inventory /path/to/project
   ai-sync plugins
   ai-sync plugins --dry-run
   ai-sync clean --dry-run
