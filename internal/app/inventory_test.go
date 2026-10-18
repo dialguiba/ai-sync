@@ -645,3 +645,118 @@ func TestInventoryReportsInvalidNamedEntriesAndKeepsValidNeighbors(t *testing.T)
 		}
 	}
 }
+
+func TestInventoryCompleteProjectIsStableAndReadOnly(t *testing.T) {
+	project := t.TempDir()
+	caller := t.TempDir()
+	marker := filepath.Join(project, "command-ran")
+	writeFile(t, project, ".ai/project.md", "# Shared\n")
+	writeFile(t, project, ".ai/targets/codex.md", "# Codex\n")
+	writeFile(t, project, ".ai/rules/zeta.md", "---\npaths: [src/**]\n---\n# Zeta\n")
+	writeFile(t, project, ".ai/rules/alpha.md", "---\npaths: [docs/**]\n---\n# Alpha\n")
+	writeFile(t, project, ".ai/agents/reviewer.md", "---\nname: reviewer\ndescription: Review code\n---\n# Reviewer\n")
+	writeFile(t, project, ".ai/skills/review/SKILL.md", "---\nname: review\ndescription: Review code\n---\n# Review\n")
+	writeFile(t, project, ".ai/skills/review/references/checklist.md", "# Checklist\n")
+	writeFile(t, project, ".ai/mcp.yaml", "servers:\n  zeta:\n    command: touch\n    args: ['"+marker+"']\n  alpha:\n    command: echo\n")
+	writeFile(t, project, ".ai/plugins.yaml", "marketplaces:\n  tools:\n    repo: org/tools\nplugins:\n  zeta@tools: false\n  alpha@tools: true\n")
+	writeFile(t, project, ".ai/hooks.yaml", "SessionStart:\n  - hooks:\n      - type: command\n        command: touch "+marker+"\n")
+	writeFile(t, project, ".ai/setup.yaml", "tool:\n  check: touch "+marker+"\n  install: touch "+marker+"\n")
+	writeFile(t, project, ".ai/z-last.txt", "extra\n")
+	writeFile(t, project, ".ai/assets/a-first.txt", "extra\n")
+	before := snapshotProject(t, project)
+
+	legacyList, err := app.Run(project, []string{"list"})
+	if err != nil {
+		t.Fatalf("list before inventory: %v", err)
+	}
+	if !strings.Contains(legacyList, "AGENTS.md\n") || !strings.Contains(legacyList, ".agents/skills/review/references/checklist.md\n") {
+		t.Fatalf("legacy list omitted generated paths: %s", legacyList)
+	}
+
+	var first string
+	for i := 0; i < 3; i++ {
+		out, err := app.Run(caller, []string{"inventory", project})
+		if err != nil {
+			t.Fatalf("inventory run %d: %v", i, err)
+		}
+		if i == 0 {
+			first = out
+		} else if out != first {
+			t.Fatalf("inventory output changed between runs:\n%s\n%s", first, out)
+		}
+	}
+	doc := decodeInventory(t, first)
+	if doc.Status != "ok" || len(doc.Diagnostics) != 0 {
+		t.Fatalf("unexpected inventory status: %+v", doc)
+	}
+	wantResources := []string{
+		"shared_instruction:project", "agent_instruction:codex", "path_rule:alpha", "path_rule:zeta",
+		"agent:reviewer", "skill:review", "mcp_server:alpha", "mcp_server:zeta",
+		"plugin:alpha@tools", "plugin:zeta@tools", "hook_event:SessionStart", "setup_entry:tool",
+	}
+	var gotResources []string
+	for _, resource := range doc.Resources {
+		gotResources = append(gotResources, resource.Type+":"+resource.Name)
+		for _, path := range append(append([]string{}, resource.Sources...), resource.Destinations...) {
+			if filepath.IsAbs(path) || strings.Contains(path, "\\") {
+				t.Fatalf("non-portable resource path %q", path)
+			}
+		}
+	}
+	if !reflect.DeepEqual(gotResources, wantResources) {
+		t.Fatalf("resource order: got %v, want %v", gotResources, wantResources)
+	}
+	if !reflect.DeepEqual(doc.Resources[5].Sources, []string{".ai/skills/review/SKILL.md", ".ai/skills/review/references/checklist.md"}) {
+		t.Fatalf("skill auxiliaries missing: %+v", doc.Resources[5])
+	}
+	if !reflect.DeepEqual(doc.AdditionalFiles, []string{".ai/assets/a-first.txt", ".ai/z-last.txt"}) {
+		t.Fatalf("unclaimed files: %v", doc.AdditionalFiles)
+	}
+	if after := snapshotProject(t, project); !reflect.DeepEqual(after, before) {
+		t.Fatalf("inventory changed project tree:\nbefore: %v\nafter: %v", before, after)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("inventory ran a declared command: %v", err)
+	}
+	if afterList, err := app.Run(project, []string{"list"}); err != nil || afterList != legacyList {
+		t.Fatalf("legacy list changed: %v\nbefore: %s\nafter: %s", err, legacyList, afterList)
+	}
+
+	writeFile(t, project, ".ai/hooks.yaml", "ZBroken:\n  - matcher: Write\nABroken:\n  - matcher: Read\nSessionStart:\n  - hooks:\n      - type: command\n        command: touch "+marker+"\n")
+	writeFile(t, project, ".ai/plugins.yaml", "marketplaces:\n  tools:\n    repo: org/tools\n  zulu:\n    source: github\nplugins:\n  zeta@tools: false\n  alpha@tools: true\n  alpha: true\n")
+	writeFile(t, project, ".ai/rules/broken.md", "---\npaths: [\n")
+	invalidBefore := snapshotProject(t, project)
+	invalid, err := app.Run(caller, []string{"inventory", project})
+	if err == nil {
+		t.Fatal("recoverable errors should make inventory invalid")
+	}
+	bad := decodeInventory(t, invalid)
+	if bad.Status != "invalid" || len(bad.Resources) != len(wantResources) || !reflect.DeepEqual(bad.AdditionalFiles, []string{".ai/assets/a-first.txt", ".ai/rules/broken.md", ".ai/z-last.txt"}) {
+		t.Fatalf("invalid source hid readable resources or unclaimed files: %+v", bad)
+	}
+	if len(bad.Diagnostics) != 5 || bad.Diagnostics[0].Path != ".ai/hooks.yaml" || bad.Diagnostics[0].Unit != "ABroken" || bad.Diagnostics[1].Unit != "ZBroken" || bad.Diagnostics[2].Path != ".ai/plugins.yaml" || bad.Diagnostics[2].Unit != "alpha" || bad.Diagnostics[3].Unit != "zulu" || bad.Diagnostics[4].Path != ".ai/rules/broken.md" {
+		t.Fatalf("diagnostics are not ordered by path and unit: %+v", bad.Diagnostics)
+	}
+	if repeated, err := app.Run(caller, []string{"inventory", project}); err == nil || repeated != invalid {
+		t.Fatalf("invalid inventory output changed: %v\n%s\n%s", err, invalid, repeated)
+	}
+	for _, diagnostic := range bad.Diagnostics {
+		if filepath.IsAbs(diagnostic.Path) || strings.Contains(diagnostic.Path, "\\") {
+			t.Fatalf("non-portable diagnostic path %q", diagnostic.Path)
+		}
+	}
+	if after := snapshotProject(t, project); !reflect.DeepEqual(after, invalidBefore) {
+		t.Fatalf("invalid inventory changed project tree:\nbefore: %v\nafter: %v", invalidBefore, after)
+	}
+
+	missingProject := t.TempDir()
+	missing, err := app.Run(caller, []string{"inventory", missingProject})
+	if err == nil || decodeInventory(t, missing).Status != "missing" {
+		t.Fatalf("missing source status: %v, %s", err, missing)
+	}
+	writeFile(t, missingProject, ".ai", "not a directory")
+	invalidRoot, err := app.Run(caller, []string{"inventory", missingProject})
+	if err == nil || decodeInventory(t, invalidRoot).Status != "invalid" {
+		t.Fatalf("invalid source status: %v, %s", err, invalidRoot)
+	}
+}

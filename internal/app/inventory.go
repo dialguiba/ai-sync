@@ -200,11 +200,26 @@ func inventoryProject(workdir string, args []string) (string, error) {
 		result.Diagnostics = append(result.Diagnostics, inventoryDiagnostic{Path: ".ai", Message: inventoryCause(err)})
 	}
 	sort.Strings(result.AdditionalFiles)
-	sort.Slice(result.Diagnostics, func(i, j int) bool {
-		if result.Diagnostics[i].Path == result.Diagnostics[j].Path {
-			return result.Diagnostics[i].Message < result.Diagnostics[j].Message
+	resourceOrder := map[string]int{
+		"shared_instruction": 0, "agent_instruction": 1, "path_rule": 2, "agent": 3,
+		"skill": 4, "mcp_server": 5, "plugin": 6, "hook_event": 7, "setup_entry": 8,
+	}
+	sort.Slice(result.Resources, func(i, j int) bool {
+		left, right := result.Resources[i], result.Resources[j]
+		if resourceOrder[left.Type] != resourceOrder[right.Type] {
+			return resourceOrder[left.Type] < resourceOrder[right.Type]
 		}
-		return result.Diagnostics[i].Path < result.Diagnostics[j].Path
+		return left.Name < right.Name
+	})
+	sort.Slice(result.Diagnostics, func(i, j int) bool {
+		left, right := result.Diagnostics[i], result.Diagnostics[j]
+		if left.Path != right.Path {
+			return left.Path < right.Path
+		}
+		if left.Unit != right.Unit {
+			return left.Unit < right.Unit
+		}
+		return left.Message < right.Message
 	})
 	if len(result.Diagnostics) > 0 {
 		result.Status = "invalid"
