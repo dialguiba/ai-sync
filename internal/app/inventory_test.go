@@ -51,6 +51,37 @@ func TestInventoryReportsInvalidMCPDeclarationWithServerName(t *testing.T) {
 	}
 }
 
+func TestInventoryValidatesHTTPMCPEntriesIndividually(t *testing.T) {
+	project := t.TempDir()
+	writeFile(t, project, ".ai/project.md", "# Shared\n")
+	writeFile(t, project, ".ai/mcp.yaml", `servers:
+  good:
+    url: https://example.com/mcp
+  both:
+    command: echo
+    url: https://example.com/mcp
+  insecure:
+    url: http://example.com/mcp
+`)
+	out, err := app.Run(t.TempDir(), []string{"inventory", project})
+	if err == nil {
+		t.Fatal("invalid MCP entries should fail")
+	}
+	doc := decodeInventory(t, out)
+	if doc.Status != "invalid" || len(doc.Diagnostics) != 2 {
+		t.Fatalf("unexpected diagnostics: %+v", doc)
+	}
+	found := false
+	for _, resource := range doc.Resources {
+		if resource.Type == "mcp_server" && resource.Name == "good" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("valid HTTP server missing: %+v", doc.Resources)
+	}
+}
+
 func TestInventoryKeepsValidMCPServerBesideWrongShapedServer(t *testing.T) {
 	project := t.TempDir()
 	writeFile(t, project, ".ai/project.md", "# Shared\n")

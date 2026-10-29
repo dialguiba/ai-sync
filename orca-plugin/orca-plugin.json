@@ -1,0 +1,20 @@
+{
+  "manifestVersion": 1,
+  "id": "ai-sync-catalog",
+  "publisher": "dialguiba",
+  "name": "ai-sync Catalog",
+  "version": "0.1.0",
+  "description": "Open the focused project's AI configuration catalog in Orca.",
+  "repository": "https://github.com/dialguiba/ai-sync",
+  "engines": { "orca": ">=1.4.0" },
+  "pluginApi": 1,
+  "main": "main.mjs",
+  "contributes": {
+    "commands": [
+      { "id": "open-catalog", "title": "Open ai-sync Catalog", "context": "worktree" }
+    ]
+  },
+  "capabilities": [
+    { "kind": "workspace:read" }
+  ]
+}

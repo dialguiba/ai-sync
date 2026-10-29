@@ -1,0 +1,681 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="catalog-token" content="__CATALOG_TOKEN__">
+  <title>AI Catalog · ai-sync</title>
+  <style>
+    :root { font-family: ui-sans-serif, system-ui, -apple-system, sans-serif; color-scheme: light dark; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #101619; color: #e9f1ef; }
+    header { padding: 24px clamp(20px, 4vw, 52px); border-bottom: 1px solid #344044; display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+    h1 { margin: 0 0 4px; font-size: 26px; letter-spacing: -.03em; }
+    header p, .muted { margin: 0; color: #a6b6b8; }
+    button, input, select { font: inherit; }
+    button { cursor: pointer; color: inherit; background: #24343a; border: 1px solid #4c6369; border-radius: 8px; padding: 8px 12px; }
+    button:hover { border-color: #9ecfc3; }
+    main { padding: 28px clamp(20px, 4vw, 52px) 60px; max-width: 1500px; margin: auto; }
+    .toolbar { display: flex; gap: 12px; align-items: center; margin-bottom: 22px; flex-wrap: wrap; }
+    input { color: inherit; background: #1b272b; border: 1px solid #4c6369; border-radius: 8px; padding: 10px 12px; width: min(100%, 400px); }
+    .count { color: #a6b6b8; }
+    .layout { display: grid; grid-template-columns: minmax(280px, 380px) minmax(0, 1fr); gap: 20px; }
+    .panel { background: #192327; border: 1px solid #344044; border-radius: 12px; overflow: hidden; }
+    .panel h2 { font-size: 15px; margin: 0; padding: 16px 18px; border-bottom: 1px solid #344044; }
+    .panel-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; padding: 10px 12px 10px 18px; border-bottom: 1px solid #344044; }
+    .panel-heading h2 { padding: 0; border: 0; }
+    .panel-actions { display: flex; gap: 6px; }
+    .panel-actions button { padding: 5px 7px; font-size: 12px; }
+    .panel-actions button:disabled { cursor: default; opacity: .5; }
+    .group { display: flex; width: 100%; align-items: center; gap: 10px; text-align: left; color: #9ecfc3; background: transparent; border: 0; border-radius: 0; border-top: 1px solid #344044; padding: 13px 18px; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; }
+    .group:first-child { border-top: 0; }
+    .group:hover { background: #24343a; }
+    .group-arrow { font-size: 15px; width: 12px; }
+    .group-count { margin-left: auto; color: #a6b6b8; }
+    .group-items { padding-bottom: 6px; }
+    .project { display: flex; width: 100%; align-items: center; gap: 9px; text-align: left; background: transparent; border: 0; border-radius: 0; border-top: 1px solid #344044; padding: 12px 16px; font-weight: 650; }
+    .project:first-child { border-top: 0; }
+    .project:hover, .project.active { background: #24343a; }
+    .project small { margin-left: auto; font-weight: 400; color: #a6b6b8; }
+    .project .group-arrow { color: #9ecfc3; }
+    .project-info { padding: 8px 18px; font-size: 12px; color: #a6b6b8; }
+    .project-resources .group { padding-left: 30px; }
+    .project-resources .item { padding-left: 44px; }
+    .item { display: block; width: 100%; text-align: left; border: 0; border-radius: 0; padding: 10px 18px; background: transparent; }
+    .item:hover, .item.active { background: #2b3e42; }
+    .item small { display: block; color: #a6b6b8; margin-top: 3px; }
+    .detail { padding: 20px; min-height: 360px; }
+    .detail h3 { margin: 0 0 8px; font-size: 22px; }
+    .detail h4 { margin: 24px 0 8px; font-size: 13px; text-transform: uppercase; color: #a6b6b8; letter-spacing: .06em; }
+    .path { display: flex; align-items: center; justify-content: space-between; gap: 12px; border: 1px solid #344044; border-radius: 8px; padding: 8px 10px; margin: 6px 0; }
+    code { overflow-wrap: anywhere; color: #c4e6d7; }
+    .path button { flex: none; padding: 5px 9px; }
+    .notice { border: 1px solid #8e7142; background: #352c20; padding: 12px 16px; border-radius: 8px; margin-bottom: 20px; }
+    .notice ul { margin: 8px 0 0; padding-left: 20px; }
+    .empty { padding: 18px; color: #a6b6b8; }
+    .badge { display: inline-block; font-size: 12px; padding: 3px 7px; border-radius: 5px; background: #304a47; margin-left: 8px; }
+    select { color: inherit; background: #1b272b; border: 1px solid #4c6369; border-radius: 8px; padding: 9px; max-width: 100%; }
+    .header-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .language { display: flex; align-items: center; gap: 6px; font-size: 13px; }
+    .language select { padding: 7px 9px; }
+    .copy { border-top: 1px solid #344044; margin-top: 24px; padding-top: 8px; }
+    .copy-actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 12px 0; }
+    .copy-file { border: 1px solid #344044; border-radius: 8px; padding: 10px; margin: 8px 0; }
+    .copy-file summary { cursor: pointer; }
+    .compare { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 10px; }
+    .compare pre { overflow: auto; max-height: 280px; margin: 5px 0; padding: 10px; background: #101619; font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .success { color: #9ecfc3; }
+    .plugin-variant { border: 1px solid #344044; border-radius: 8px; padding: 14px 16px; margin: 10px 0; }
+    .plugin-variant h5 { font-size: 16px; margin: 0 0 10px; }
+    .plugin-variant h6 { font-size: 13px; margin: 16px 0 6px; }
+    .plugin-variant p { margin: 7px 0; }
+    .plugin-variant ul { margin: 6px 0; padding-left: 22px; }
+    .plugin-variant li { margin: 5px 0; }
+    .plugin-variant small { display: block; color: #a6b6b8; }
+    @media (max-width: 850px) { .compare { grid-template-columns: 1fr; } }
+    @media (max-width: 750px) { .layout { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <header><div><h1 data-i18n="title">AI Catalog</h1><p><span data-i18n="subtitlePrefix">Resources in</span> <code>.ai/</code> <span data-i18n="subtitleSuffix">read by ai-sync</span></p></div><div class="header-actions"><label class="language"><span class="muted" data-i18n="languageLabel">Language</span><select id="language"><option value="en">English</option><option value="es">Español</option></select></label><button id="refresh" data-i18n="refresh">Refresh</button></div></header>
+  <main>
+    <div id="notice"></div>
+    <div class="toolbar"><input id="search" type="search" placeholder="Search resources or paths…" aria-label="Search resources"><span id="count" class="count"></span></div>
+    <div class="layout"><section class="panel"><div class="panel-heading"><h2 data-i18n="projectsPanel">Orca projects</h2><div class="panel-actions"><button id="toggle-all" type="button" data-i18n="collapseAll">Collapse all</button></div></div><div id="list"><div class="empty" data-i18n="loading">Loading…</div></div></section><section class="panel"><h2 data-i18n="detailPanel">Detail</h2><div id="detail" class="detail muted" data-i18n="selectResource">Select a resource to see its files.</div></section></div>
+  </main>
+  <script type="application/json" id="catalog-bootstrap">__CATALOG_BOOTSTRAP__</script>
+  <script>
+    const messages = {
+      en: {
+        pageTitle: 'AI Catalog · ai-sync',
+        title: 'AI Catalog',
+        subtitlePrefix: 'Resources in',
+        subtitleSuffix: 'read by ai-sync',
+        languageLabel: 'Language',
+        refresh: 'Refresh',
+        searchPlaceholder: 'Search resources or paths…',
+        searchAria: 'Search resources',
+        countText: '{visible} of {total} resources',
+        resourcesPanel: 'Resources',
+        projectsPanel: 'Orca projects',
+        currentProject: 'Current project',
+        noLocalWorktree: 'No local worktree available',
+        projectLoadError: 'Could not load Orca projects: ',
+        detailPanel: 'Detail',
+        collapseAll: 'Collapse all',
+        expandAll: 'Expand all',
+        noResults: 'No results.',
+        selectResource: 'Select a resource to see its files.',
+        loading: 'Loading…',
+        inventoryError: 'Could not read the inventory: ',
+        status: 'Status: ',
+        noResources: 'No resources to display.',
+        enabled: 'Enabled',
+        disabled: 'Disabled',
+        sourceFiles: 'Source files',
+        openInOrca: 'Open in Orca',
+        openError: 'Could not open the file: ',
+        destinations: 'Generated destinations',
+        noDestinations: 'It generates no destination files.',
+        pluginVariants: 'Plugin variants',
+        pluginLegacyUnknown: 'No project package is declared for inspection. Claude may still have this plugin installed; check with ai-sync plugins status <project-dir>.',
+        pluginContentUnknown: 'The package has not been inspected; its components are unknown.',
+        pluginNoSkills: 'No skills found in this package.',
+        pluginNoMCPServers: 'No MCP servers found in this package.',
+        pluginDisabledNote: 'This plugin is disabled; the listed components will not be installed by ai-sync.',
+        pluginContentsNote: 'Package contents and compatibility, not installation status.',
+        pluginIdentity: 'Package identity',
+        pluginVersion: 'Version',
+        pluginPath: 'Local package',
+        pluginGit: 'Git repository',
+        pluginRef: 'Pinned commit',
+        pluginSubdir: 'Subdirectory',
+        pluginInstall: 'Marketplace install',
+        pluginSkills: 'Skills',
+        pluginMCPServers: 'MCP servers',
+        pluginRequirements: 'Missing requirements',
+        pluginUnsupported: 'Unsupported components',
+        variantStatuses: { compatible: 'Compatible', partial: 'Partially compatible', incompatible: 'Incompatible', pending: 'Pending requirements', unverified: 'Unverified', invalid: 'Invalid' },
+        copyHeading: 'Copy to another Orca project',
+        fixBeforeCopy: 'Fix this resource before copying it.',
+        loadProjects: 'Load projects',
+        loadProjectsError: 'Could not load projects: ',
+        noWorktrees: 'No other local worktrees are available.',
+        destinationAria: 'Destination project',
+        chooseWorktree: 'Choose a destination worktree',
+        destinationNoAI: 'This project does not have .ai/ yet. Copying will create the folder if you confirm. If you copy only the resource, project.md and mcp.yaml will still be missing before you can run ai-sync there. You can also copy the entire source configuration.',
+        scopeAria: 'What to copy',
+        scopeResource: 'Only this skill or agent',
+        scopeAll: 'The entire .ai/ configuration from the source',
+        scopeAllNote: 'Includes every file under .ai/, such as other skills, agents, plugins.yaml and setup.yaml. Review the list before confirming. No commands run and no destination files are deleted.',
+        reviewCopy: 'Review copy',
+        prepareError: 'Could not prepare the copy: ',
+        previewHasAI: 'The destination already has .ai/. ',
+        previewNoAI: '.ai/ will be created in the destination. ',
+        previewFilesOne: 'This preview includes 1 file.',
+        previewFilesMany: 'This preview includes {n} files.',
+        previewTail: "Afterwards you can run ai-sync there to generate each agent's configuration.",
+        fileStatusNew: 'new',
+        fileStatusSame: 'same',
+        fileStatusConflict: 'different',
+        binaryFile: 'Binary file or too large to display.',
+        sourceSide: 'Source',
+        destinationSide: 'Destination',
+        conflictAria: 'What to do with different files',
+        conflictPlaceholder: 'Choose how to resolve different files',
+        conflictKeep: 'Keep the destination files',
+        conflictReplace: 'Replace them with the source files',
+        conflictsOne: '1 different file:',
+        conflictsMany: '{n} different files:',
+        confirmCopy: 'Confirm copy',
+        copyError: 'Could not complete the copy: ',
+        copiedOne: '1 file copied. Run ai-sync in the destination project whenever you want to generate its agent files.',
+        copiedMany: '{n} files copied. Run ai-sync in the destination project whenever you want to generate its agent files.',
+        labels: {
+          shared_instruction: 'Shared instructions',
+          agent_instruction: 'Agent instructions',
+          path_rule: 'Rules',
+          agent: 'Agents',
+          skill: 'Skills',
+          mcp_server: 'MCP servers',
+          plugin: 'Plugins',
+          hook_event: 'Hooks',
+          setup_entry: 'Setup',
+          additional_file: 'Additional files',
+        },
+      },
+      es: {
+        pageTitle: 'Catálogo de AI · ai-sync',
+        title: 'Catálogo de AI',
+        subtitlePrefix: 'Recursos de',
+        subtitleSuffix: 'leídos por ai-sync',
+        languageLabel: 'Idioma',
+        refresh: 'Actualizar',
+        searchPlaceholder: 'Buscar recurso o ruta…',
+        searchAria: 'Buscar recurso',
+        countText: '{visible} de {total} recursos',
+        resourcesPanel: 'Recursos',
+        projectsPanel: 'Proyectos de Orca',
+        currentProject: 'Proyecto actual',
+        noLocalWorktree: 'No hay un worktree local disponible',
+        projectLoadError: 'No se pudieron cargar los proyectos de Orca: ',
+        detailPanel: 'Detalle',
+        collapseAll: 'Colapsar todo',
+        expandAll: 'Desplegar todo',
+        noResults: 'No hay resultados.',
+        selectResource: 'Selecciona un recurso para ver sus archivos.',
+        loading: 'Cargando…',
+        inventoryError: 'No se pudo leer el inventario: ',
+        status: 'Estado: ',
+        noResources: 'No hay recursos para mostrar.',
+        enabled: 'Habilitado',
+        disabled: 'Deshabilitado',
+        sourceFiles: 'Archivos fuente',
+        openInOrca: 'Abrir en Orca',
+        openError: 'No se pudo abrir el archivo: ',
+        destinations: 'Destinos generados',
+        noDestinations: 'No genera archivos de destino.',
+        pluginVariants: 'Variantes de plugin',
+        pluginLegacyUnknown: 'No hay un paquete declarado en el proyecto para inspeccionar. Claude podría tener este plugin instalado; compruébalo con ai-sync plugins status <project-dir>.',
+        pluginContentUnknown: 'El paquete no se ha inspeccionado; se desconoce su contenido.',
+        pluginNoSkills: 'No se encontraron skills en este paquete.',
+        pluginNoMCPServers: 'No se encontraron servidores MCP en este paquete.',
+        pluginDisabledNote: 'Este plugin está deshabilitado; ai-sync no instalará los componentes listados.',
+        pluginContentsNote: 'Contenido y compatibilidad del paquete, no estado de instalación.',
+        pluginIdentity: 'Identidad del paquete',
+        pluginVersion: 'Versión',
+        pluginPath: 'Paquete local',
+        pluginGit: 'Repositorio Git',
+        pluginRef: 'Commit fijado',
+        pluginSubdir: 'Subdirectorio',
+        pluginInstall: 'Instalación de marketplace',
+        pluginSkills: 'Skills',
+        pluginMCPServers: 'Servidores MCP',
+        pluginRequirements: 'Requisitos pendientes',
+        pluginUnsupported: 'Componentes no compatibles',
+        variantStatuses: { compatible: 'Compatible', partial: 'Parcialmente compatible', incompatible: 'Incompatible', pending: 'Requisitos pendientes', unverified: 'Sin verificar', invalid: 'Inválido' },
+        copyHeading: 'Copiar a otro proyecto de Orca',
+        fixBeforeCopy: 'Corrige este recurso antes de copiarlo.',
+        loadProjects: 'Cargar proyectos',
+        loadProjectsError: 'No se pudieron cargar los proyectos: ',
+        noWorktrees: 'No hay otros worktrees locales disponibles.',
+        destinationAria: 'Proyecto de destino',
+        chooseWorktree: 'Elige un worktree de destino',
+        destinationNoAI: 'Este proyecto aún no tiene .ai/. La copia creará la carpeta si confirmas. Si copias solo el recurso, todavía faltarán project.md y mcp.yaml para poder ejecutar ai-sync allí. Puedes copiar también toda la configuración del origen.',
+        scopeAria: 'Qué copiar',
+        scopeResource: 'Solo este skill o agente',
+        scopeAll: 'Toda la configuración .ai/ del origen',
+        scopeAllNote: 'Incluye todos los archivos de .ai/, como otros skills, agentes, plugins.yaml y setup.yaml. Revisa la lista antes de confirmar. No se ejecutarán comandos ni se borrarán archivos del destino.',
+        reviewCopy: 'Revisar copia',
+        prepareError: 'No se pudo preparar la copia: ',
+        previewHasAI: 'El destino ya tiene .ai/. ',
+        previewNoAI: 'Se creará .ai/ en el destino. ',
+        previewFilesOne: 'Esta vista previa incluye 1 archivo.',
+        previewFilesMany: 'Esta vista previa incluye {n} archivos.',
+        previewTail: 'Después podrás ejecutar ai-sync allí para generar la configuración de cada agente.',
+        fileStatusNew: 'nuevo',
+        fileStatusSame: 'igual',
+        fileStatusConflict: 'diferente',
+        binaryFile: 'Archivo binario o demasiado grande para mostrar.',
+        sourceSide: 'Origen',
+        destinationSide: 'Destino',
+        conflictAria: 'Qué hacer con los archivos diferentes',
+        conflictPlaceholder: 'Elige cómo resolver archivos diferentes',
+        conflictKeep: 'Conservar los archivos del destino',
+        conflictReplace: 'Reemplazar con los del origen',
+        conflictsOne: '1 archivo diferente:',
+        conflictsMany: '{n} archivos diferentes:',
+        confirmCopy: 'Confirmar copia',
+        copyError: 'No se pudo completar la copia: ',
+        copiedOne: '1 archivo copiado. Ejecuta ai-sync en el proyecto de destino cuando quieras generar sus archivos de agente.',
+        copiedMany: '{n} archivos copiados. Ejecuta ai-sync en el proyecto de destino cuando quieras generar sus archivos de agente.',
+        labels: {
+          shared_instruction: 'Instrucciones compartidas',
+          agent_instruction: 'Instrucciones por agente',
+          path_rule: 'Reglas',
+          agent: 'Agents',
+          skill: 'Skills',
+          mcp_server: 'Servidores MCP',
+          plugin: 'Plugins',
+          hook_event: 'Hooks',
+          setup_entry: 'Setup',
+          additional_file: 'Archivos adicionales',
+        },
+      },
+    };
+    const storageKey = 'ai-sync-catalog-language';
+    function initialLanguage() {
+      const requested = new URLSearchParams(window.location.search).get('lang');
+      if (messages[requested]) return requested;
+      try {
+        const stored = window.localStorage.getItem(storageKey);
+        if (messages[stored]) return stored;
+      } catch {
+        // Storage can be unavailable; fall back to the default language.
+      }
+      return 'en';
+    }
+    const state = { lang: initialLanguage(), inventory: null, projects: [], activeProject: '', projectCollapsed: false, selected: null, collapsed: new Set(), searchCollapsed: new Set(), worktrees: null, target: '', scope: 'resource', preview: null, copyMessage: '' };
+    const token = document.querySelector('meta[name="catalog-token"]').content;
+    const list = document.getElementById('list');
+    const detail = document.getElementById('detail');
+    const notice = document.getElementById('notice');
+    const search = document.getElementById('search');
+    const count = document.getElementById('count');
+    const toggleAll = document.getElementById('toggle-all');
+    const language = document.getElementById('language');
+    function t(key, params = {}) {
+      const dictionary = messages[state.lang] || messages.en;
+      const template = dictionary[key] ?? messages.en[key] ?? key;
+      return template.replace(/\{(\w+)\}/g, (match, name) => (name in params ? String(params[name]) : match));
+    }
+    function tCount(key, total) { return t(total === 1 ? key + 'One' : key + 'Many', { n: total }); }
+    function typeLabel(type) {
+      const dictionary = messages[state.lang] || messages.en;
+      return (dictionary.labels && dictionary.labels[type]) || (messages.en.labels[type]) || type;
+    }
+    function variantStatusLabel(status) {
+      const dictionary = messages[state.lang] || messages.en;
+      return dictionary.variantStatuses?.[status] || messages.en.variantStatuses[status] || status;
+    }
+    function applyStatic() {
+      document.documentElement.lang = state.lang;
+      document.title = t('pageTitle');
+      for (const node of document.querySelectorAll('[data-i18n]')) node.textContent = t(node.dataset.i18n);
+      search.placeholder = t('searchPlaceholder');
+      search.setAttribute('aria-label', t('searchAria'));
+      language.setAttribute('aria-label', t('languageLabel'));
+    }
+    const el = (tag, className, content) => { const node = document.createElement(tag); if (className) node.className = className; if (content !== undefined) node.textContent = content; return node; };
+    const items = () => [...state.inventory.resources, ...state.inventory.additional_files.map(path => ({ type: 'additional_file', name: path, sources: [path], destinations: [] }))];
+    const projectQuery = () => {
+      if (!state.activeProject) return '';
+      const active = state.projects.find(project => project.id === state.activeProject);
+      return active && active.current ? '' : '?projectId=' + encodeURIComponent(state.activeProject);
+    };
+    async function post(path, body) {
+      const response = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Catalog-Token': token }, body: JSON.stringify(body) });
+      if (!response.ok) throw new Error(await response.text());
+      return response.json();
+    }
+
+    async function loadWorktrees() {
+      const requestedProject = state.activeProject;
+      const response = await fetch('/api/worktrees' + projectQuery(), { cache: 'no-store' });
+      if (!response.ok) throw new Error(await response.text());
+      const worktrees = await response.json();
+      if (requestedProject !== state.activeProject) return;
+      state.worktrees = worktrees;
+      if (!state.worktrees.some(worktree => worktree.id === state.target)) state.target = '';
+      render();
+    }
+
+    async function loadProjects() {
+      const response = await fetch('/api/projects', { cache: 'no-store' });
+      if (!response.ok) throw new Error(await response.text());
+      state.projects = await response.json();
+      const current = state.projects.find(project => project.current);
+      if (!state.projects.some(project => project.id === state.activeProject && project.worktreeId)) {
+        state.activeProject = current?.id || state.projects.find(project => project.worktreeId)?.id || '';
+        state.projectCollapsed = false;
+      }
+    }
+
+    async function selectProject(id) {
+      if (id === state.activeProject) {
+        state.projectCollapsed = !state.projectCollapsed;
+        render();
+        return;
+      }
+      state.activeProject = id;
+      state.projectCollapsed = false;
+      state.inventory = null;
+      state.selected = null;
+      state.worktrees = null;
+      state.target = '';
+      state.preview = null;
+      render();
+      await refresh();
+    }
+
+    async function refresh() {
+      try {
+        try { await loadProjects(); }
+        catch {
+          if (!state.projects.length) state.projects = [{ id: '', displayName: t('currentProject'), worktreeId: 'current', worktreeName: '', current: true }];
+        }
+        const requestedProject = state.activeProject;
+        const response = await fetch('/api/inventory' + projectQuery(), { cache: 'no-store' });
+        if (!response.ok) throw new Error(await response.text());
+        const inventory = await response.json();
+        if (requestedProject !== state.activeProject) return;
+        state.inventory = inventory;
+        state.preview = null;
+        state.copyMessage = '';
+        const entries = items();
+        if (!entries.some((item, index) => index === state.selected)) state.selected = entries.length ? 0 : null;
+        render();
+      } catch (error) {
+        notice.replaceChildren(el('div', 'notice', t(state.projects.length ? 'inventoryError' : 'projectLoadError') + error.message));
+        if (!state.inventory) render();
+      }
+    }
+
+    function render() {
+      list.replaceChildren();
+      for (const project of state.projects) {
+        const expanded = project.id === state.activeProject && !state.projectCollapsed;
+        const heading = el('button', 'project' + (expanded ? ' active' : ''));
+        heading.type = 'button';
+        heading.setAttribute('aria-expanded', String(expanded));
+        heading.append(el('span', 'group-arrow', expanded ? '▾' : '▸'), el('span', '', project.displayName));
+        if (project.current) heading.append(el('small', '', project.worktreeName));
+        heading.onclick = () => project.worktreeId && selectProject(project.id);
+        if (!project.worktreeId) { heading.disabled = true; heading.title = t('noLocalWorktree'); }
+        list.append(heading);
+        if (expanded && project.worktreeName) list.append(el('div', 'project-info', project.worktreeName));
+        if (expanded && !state.inventory) list.append(el('div', 'empty', t('selectResource')));
+      }
+      if (!state.inventory) { count.textContent = ''; detail.replaceChildren(el('p', 'muted', t('selectResource'))); return; }
+      const data = state.inventory;
+      notice.replaceChildren();
+      if (data.status !== 'ok' || data.diagnostics.length) {
+        const box = el('div', 'notice');
+        box.append(el('strong', '', t('status') + data.status));
+        const notes = el('ul');
+        for (const diagnostic of data.diagnostics) notes.append(el('li', '', diagnostic.path + (diagnostic.unit ? ' · ' + diagnostic.unit : '') + ': ' + diagnostic.message));
+        box.append(notes); notice.append(box);
+      }
+      const query = search.value.trim().toLocaleLowerCase();
+      const entries = items();
+      const visible = entries.map((item, index) => ({ item, index })).filter(({ item }) => {
+        const components = (item.variants || []).flatMap(variant => [...(variant.skills || []), ...(variant.mcp_servers || [])]);
+        return [item.type, item.name, ...item.sources, ...components].some(value => value.toLocaleLowerCase().includes(query));
+      });
+      count.textContent = t('countText', { visible: visible.length, total: entries.length });
+      const projectResources = el('div', 'project-resources');
+      const groups = new Map();
+      for (const { item, index } of visible) {
+        if (!groups.has(item.type)) groups.set(item.type, []);
+        groups.get(item.type).push({ item, index });
+      }
+      const activeCollapsed = query ? state.searchCollapsed : state.collapsed;
+      const groupTypes = [...groups.keys()];
+      toggleAll.disabled = !groupTypes.length;
+      toggleAll.textContent = groupTypes.some(type => !activeCollapsed.has(type)) ? t('collapseAll') : t('expandAll');
+      for (const [type, members] of groups) {
+        const collapsed = activeCollapsed;
+        const expanded = !collapsed.has(type);
+        const heading = el('button', 'group');
+        heading.type = 'button';
+        heading.dataset.type = type;
+        heading.setAttribute('aria-expanded', String(expanded));
+        heading.append(el('span', 'group-arrow', expanded ? '▾' : '▸'), el('span', '', typeLabel(type)), el('span', 'group-count', String(members.length)));
+        heading.onclick = () => { expanded ? collapsed.add(type) : collapsed.delete(type); render(); };
+        projectResources.append(heading);
+        if (!expanded) continue;
+        const children = el('div', 'group-items');
+        for (const { item, index } of members) {
+          const button = el('button', 'item' + (index === state.selected ? ' active' : ''));
+          button.append(el('span', '', item.name), el('small', '', item.sources.join(', ')));
+          button.onclick = () => { state.selected = index; state.preview = null; state.copyMessage = ''; render(); };
+          children.append(button);
+        }
+        projectResources.append(children);
+      }
+      if (!visible.length) projectResources.append(el('div', 'empty', t('noResults')));
+      const activeHeading = [...list.querySelectorAll('.project')].find(node => node.getAttribute('aria-expanded') === 'true');
+      if (activeHeading) {
+        const info = activeHeading.nextElementSibling;
+        (info?.classList.contains('project-info') ? info : activeHeading).after(projectResources);
+      }
+      renderDetail(entries[state.selected]);
+    }
+
+    function renderDetail(item) {
+      detail.replaceChildren();
+      if (!item) { detail.append(el('p', 'muted', t('noResources'))); return; }
+      const heading = el('h3', '', item.name);
+      heading.append(el('span', 'badge', typeLabel(item.type)));
+      detail.append(heading);
+      if (item.status) detail.append(el('p', 'muted', t('status') + item.status));
+      if (item.enabled !== undefined) detail.append(el('p', 'muted', item.enabled ? t('enabled') : t('disabled')));
+      detail.append(el('h4', '', t('sourceFiles')));
+      for (const path of item.sources) {
+        const row = el('div', 'path'); row.append(el('code', '', path));
+        const button = el('button', '', t('openInOrca'));
+        button.onclick = async () => {
+          button.disabled = true;
+          try {
+            const response = await fetch('/api/open', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Catalog-Token': token }, body: JSON.stringify({ path, projectId: state.activeProject }) });
+            if (!response.ok) throw new Error(await response.text());
+          } catch (error) { window.alert(t('openError') + error.message); }
+          finally { button.disabled = false; }
+        };
+        row.append(button); detail.append(row);
+      }
+      detail.append(el('h4', '', t('destinations')));
+      if (item.destinations.length) for (const path of item.destinations) detail.append(el('div', 'path', path));
+      else detail.append(el('p', 'muted', t('noDestinations')));
+      if (item.type === 'plugin') renderPluginVariants(item);
+      if (item.type === 'skill' || item.type === 'agent') renderCopy(item);
+    }
+
+    function renderPluginVariants(item) {
+      detail.append(el('h4', '', t('pluginVariants')));
+      detail.append(el('p', 'muted', t('pluginContentsNote')));
+      if (!item.variants?.length) {
+        detail.append(el('p', 'muted', t('pluginLegacyUnknown')));
+        return;
+      }
+      for (const variant of item.variants) {
+        const section = el('section', 'plugin-variant');
+        const target = { claude: 'Claude', codex: 'Codex', kiro: 'Kiro' }[variant.target] || variant.target;
+        const heading = el('h5', '', target);
+        heading.append(el('span', 'badge', variantStatusLabel(variant.status)));
+        section.append(heading);
+        if (item.enabled === false) section.append(el('p', 'muted', t('pluginDisabledNote')));
+        const source = variant.source || {};
+        for (const [key, value] of [
+          ['pluginIdentity', variant.package_name], ['pluginVersion', variant.version],
+          ['pluginPath', source.path], ['pluginGit', source.git], ['pluginRef', source.ref],
+          ['pluginSubdir', source.subdir], ['pluginInstall', source.install],
+        ]) {
+          if (!value) continue;
+          const row = el('p');
+          row.append(el('strong', '', t(key) + ': '), el('code', '', value));
+          section.append(row);
+        }
+        const inspected = !!source.path && variant.status !== 'unverified' && variant.status !== 'invalid';
+        renderPluginComponentList(section, 'pluginSkills', variant.skills, variant.skill_sources, inspected, 'pluginNoSkills');
+        renderPluginComponentList(section, 'pluginMCPServers', variant.mcp_servers, variant.mcp_server_sources, inspected, 'pluginNoMCPServers');
+        for (const [headingKey, values] of [['pluginRequirements', variant.requirements], ['pluginUnsupported', variant.unsupported]]) {
+          if (!values?.length) continue;
+          section.append(el('h6', '', t(headingKey)));
+          const list = el('ul');
+          for (const value of values) list.append(el('li', '', value));
+          section.append(list);
+        }
+        detail.append(section);
+      }
+    }
+
+    function renderPluginComponentList(section, headingKey, names, sources, inspected, emptyKey) {
+      section.append(el('h6', '', t(headingKey)));
+      if (!names?.length) {
+        section.append(el('p', 'muted', t(inspected ? emptyKey : 'pluginContentUnknown')));
+        return;
+      }
+      const list = el('ul');
+      for (const name of names) {
+        const item = el('li');
+        item.append(el('code', '', name));
+        if (sources?.[name]) item.append(el('small', '', sources[name]));
+        list.append(item);
+      }
+      section.append(list);
+    }
+
+    function renderCopy(item) {
+      const section = el('section', 'copy');
+      section.append(el('h4', '', t('copyHeading')));
+      if (state.copyMessage) section.append(el('p', 'success', state.copyMessage));
+      if (item.status === 'invalid') { section.append(el('p', 'muted', t('fixBeforeCopy'))); detail.append(section); return; }
+      if (!state.worktrees) {
+        const button = el('button', '', t('loadProjects'));
+        button.onclick = async () => { button.disabled = true; try { await loadWorktrees(); } catch (error) { window.alert(t('loadProjectsError') + error.message); button.disabled = false; } };
+        section.append(button); detail.append(section); return;
+      }
+      if (!state.worktrees.length) { section.append(el('p', 'muted', t('noWorktrees'))); detail.append(section); return; }
+      const actions = el('div', 'copy-actions');
+      const picker = el('select');
+      picker.setAttribute('aria-label', t('destinationAria'));
+      const placeholder = el('option', '', t('chooseWorktree')); placeholder.value = ''; picker.append(placeholder);
+      for (const worktree of state.worktrees) {
+        const option = el('option', '', worktree.path + ' · ' + worktree.displayName);
+        option.value = worktree.id; picker.append(option);
+      }
+      picker.value = state.target;
+      picker.onchange = () => { state.target = picker.value; state.scope = 'resource'; state.preview = null; state.copyMessage = ''; render(); };
+      actions.append(picker); section.append(actions);
+      const target = state.worktrees.find(worktree => worktree.id === state.target);
+      if (target) {
+        if (!target.hasAi) section.append(el('div', 'notice', t('destinationNoAI')));
+        const scopePicker = el('select');
+        scopePicker.setAttribute('aria-label', t('scopeAria'));
+        for (const [value, label] of [['resource', t('scopeResource')], ['all', t('scopeAll')]]) {
+          const option = el('option', '', label); option.value = value; scopePicker.append(option);
+        }
+        scopePicker.value = state.scope;
+        scopePicker.onchange = () => { state.scope = scopePicker.value; state.preview = null; state.copyMessage = ''; render(); };
+        section.append(scopePicker);
+        if (state.scope === 'all') section.append(el('p', 'muted', t('scopeAllNote')));
+      }
+      const previewButton = el('button', '', t('reviewCopy'));
+      previewButton.disabled = !state.target;
+      previewButton.onclick = async () => {
+        previewButton.disabled = true;
+        try { state.preview = await post('/api/copy/preview', { projectId: state.activeProject, type: item.type, name: item.name, scope: state.scope, worktreeId: state.target }); render(); }
+        catch (error) { window.alert(t('prepareError') + error.message); previewButton.disabled = false; }
+      };
+      section.append(previewButton);
+      const preview = state.preview;
+      if (preview) {
+        section.append(el('p', 'muted', (preview.targetHasAi ? t('previewHasAI') : t('previewNoAI')) + tCount('previewFiles', preview.files.length) + ' ' + t('previewTail')));
+        for (const file of preview.files) {
+          const row = el('details', 'copy-file');
+          const status = { new: t('fileStatusNew'), same: t('fileStatusSame'), conflict: t('fileStatusConflict') }[file.status] || file.status;
+          row.append(el('summary', '', status + ' · ' + file.path));
+          if (file.status === 'conflict') {
+            const compare = el('div', 'compare');
+            for (const [label, content] of [[t('sourceSide'), file.sourceText], [t('destinationSide'), file.targetText]]) {
+              const side = el('div'); side.append(el('strong', '', label), el('pre', '', content || t('binaryFile'))); compare.append(side);
+            }
+            row.append(compare);
+          }
+          section.append(row);
+        }
+        const conflicts = preview.files.filter(file => file.status === 'conflict').length;
+        const choice = el('select');
+        choice.setAttribute('aria-label', t('conflictAria'));
+        for (const [value, label] of [['', t('conflictPlaceholder')], ['keep', t('conflictKeep')], ['replace', t('conflictReplace')]]) {
+          const option = el('option', '', label); option.value = value; choice.append(option);
+        }
+        if (conflicts) section.append(el('p', 'muted', tCount('conflicts', conflicts)), choice);
+        else choice.value = 'keep';
+        const confirm = el('button', '', t('confirmCopy'));
+        confirm.disabled = !!conflicts;
+        choice.onchange = () => { confirm.disabled = !choice.value; };
+        confirm.onclick = async () => {
+          confirm.disabled = true;
+          try {
+            const result = await post('/api/copy/apply', { projectId: state.activeProject, type: item.type, name: item.name, scope: state.scope, worktreeId: state.target, fingerprint: preview.fingerprint, conflictAction: choice.value });
+            state.preview = null;
+            state.copyMessage = tCount('copied', result.copied);
+            render();
+          } catch (error) { window.alert(t('copyError') + error.message); confirm.disabled = false; }
+        };
+        section.append(confirm);
+      }
+      detail.append(section);
+    }
+    language.addEventListener('change', () => {
+      state.lang = messages[language.value] ? language.value : 'en';
+      try { window.localStorage.setItem(storageKey, state.lang); } catch {
+        // Persisting the choice is best effort.
+      }
+      applyStatic();
+      render();
+    });
+    search.addEventListener('input', () => { state.searchCollapsed.clear(); render(); });
+    toggleAll.addEventListener('click', () => {
+      const collapsed = search.value.trim() ? state.searchCollapsed : state.collapsed;
+      const headings = [...list.querySelectorAll('.group')];
+      const shouldCollapse = headings.some(heading => !collapsed.has(heading.dataset.type));
+      for (const heading of headings) {
+        if (shouldCollapse) collapsed.add(heading.dataset.type);
+        else collapsed.delete(heading.dataset.type);
+      }
+      render();
+    });
+    document.getElementById('refresh').addEventListener('click', refresh);
+    language.value = state.lang;
+    applyStatic();
+    const embedded = document.getElementById('catalog-bootstrap');
+    if (embedded) {
+      try {
+        const bootstrap = JSON.parse(embedded.textContent);
+        if (bootstrap && bootstrap.status) {
+          state.inventory = bootstrap;
+          const entries = items();
+          state.selected = entries.length ? 0 : null;
+          render();
+        }
+      } catch {
+        // The refresh request below still loads the inventory.
+      }
+    }
+    refresh();
+  </script>
+</body>
+</html>

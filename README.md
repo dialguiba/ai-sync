@@ -12,6 +12,10 @@
 
 `ai-sync` is a Go CLI that keeps AI-agent configuration in one canonical `.ai/` directory, then generates the files expected by Claude Code, Codex, and Kiro.
 
+The [Orca extension](docs/orca-catalog.md) adds an **Open ai-sync Catalog** command for the focused worktree. The catalog can also be opened directly with `ai-sync catalog --orca .`.
+
+For the same resource catalog in a terminal, run `ai-sync tui .`. The full-screen interface supports mouse clicks, wheel scrolling, keyboard navigation, live search, and filters by resource type. It inspects all `.ai/` resources, loads other Orca projects on request, opens source files in Orca, and reviews copies of skills or agents before applying them. Plugin actions are available from the detail panel and **Add plugin** button.
+
 Instead of maintaining three separate sets of rules, MCP settings, and skills by hand, you edit `.ai/` once and let `ai-sync` render each agent-specific format.
 
 ## ✨ Why use it?
@@ -280,6 +284,9 @@ servers:
       - '@playwright/mcp@latest'
     env:
       PLAYWRIGHT_HEADLESS: "true"
+  docs:
+    url: https://example.com/mcp
+    bearer_token_env_var: DOCS_TOKEN
 ```
 
 `ai-sync` maps that config to each agent's expected file:
@@ -290,6 +297,8 @@ servers:
 
 > [!WARNING]
 > Do not put secrets directly in `.ai/mcp.yaml`. Reference environment variables instead.
+
+Use `command` for a local stdio server or `url` for a remote HTTP server. `bearer_token_env_var` names an environment variable available to each agent process. See [MCP lifecycle examples](docs/agents/ai-resources.md#mcp-server).
 
 ### 🧩 Claude Code plugins
 
@@ -336,26 +345,31 @@ ai-sync plugins --scope user       # project (default), user, or local
 
 Entries set to `false` are reported as skipped instead of installed, in both the automatic check and the explicit command. A failed install no longer aborts the rest — every declared plugin gets attempted, and every failure is reported together at the end.
 
+For project-scoped lifecycle operations, use `ai-sync plugins add`, `status`, `updates`, `update`, and `remove`. The add, update, and remove commands currently manage Claude marketplace plugins; `status` also shows declared Codex and Kiro variants. The `manage-ai-resources` skill covers plugins, skills, rules, and MCP servers. See [resource management](docs/agents/ai-resources.md) for examples and [plugin lifecycle](docs/agents/plugin-lifecycle.md) for plugin update states.
+
+Run `ai-sync plugins tui .` for a terminal menu that lists plugin status, manages Claude project plugins, and previews or applies declared Codex and Kiro variants. It uses the existing CLI operations without opening the browser catalog.
+
 ### 🪝 Hooks
 
-Declare Claude Code hooks in `.ai/hooks.yaml`. The file is optional and only the Claude target reads it. The shape matches Claude Code's native `hooks` block in `.claude/settings.json` directly — a map from event name to a list of matchers, each with one or more commands:
+Declare Claude Code hooks in `.ai/hooks.yaml`. The file is optional and only the Claude target reads it. The shape matches Claude Code's native `hooks` block in `.claude/settings.json` directly — a map from event name to a list of matchers, each with one or more commands. `ai-sync` renders whatever event names you put here verbatim; it does not validate them against Claude Code's actual event list, so a typo (or a name copied from a plugin's own `hooks.json`, which can define convenience event names that only work inside a plugin manifest) fails silently as an "unknown hook event... ignored" warning the next time Claude Code loads the file. Use only real native events — `PreToolUse`, `PostToolUse`, `SessionStart`, `SessionEnd`, and friends; run `claude` and trigger a settings warning to see the current full list.
 
 ```yaml
 SessionStart:
   - hooks:
       - type: command
         command: "code-review-graph status || true"
-PostEdit:
+PostToolUse:
   - matcher: "Write|Edit"
     hooks:
       - type: command
         command: "code-review-graph update 2>/dev/null || true"
-PostGit:
-  - matcher: "commit"
+  - matcher: "Bash"
     hooks:
       - type: command
-        command: "code-review-graph update 2>/dev/null || true"
+        command: "cat | grep -q 'git commit' && code-review-graph update 2>/dev/null; true"
 ```
+
+There is no native "after a git commit" event — `PostToolUse` matches on tool name only, so a `Bash` matcher fires on every shell command. The `Bash` entry above reads the hook's stdin JSON (which carries `tool_input.command`) and greps it for `git commit` itself, since the matcher cannot filter by command content; `code-review-graph update` is incremental and cheap, so a false-positive match on some other `Bash` call is harmless.
 
 This is how a tool that used to ship as a plugin, or that self-installs by writing straight into `.claude/settings.json`, gets absorbed back into the canonical source: write down the hooks it needs once in `.ai/hooks.yaml`, and `ai-sync` regenerates them on every sync instead of a one-off installer script owning that part of the file.
 

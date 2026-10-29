@@ -975,6 +975,51 @@ Use atomic design.
 	}
 }
 
+func TestSyncRendersHTTPMCPForAllTargets(t *testing.T) {
+	dir := t.TempDir()
+	writeCanonicalSource(t, dir)
+	writeFile(t, dir, ".ai/mcp.yaml", `servers:
+  docs:
+    url: https://example.com/mcp
+    bearer_token_env_var: DOCS_TOKEN
+    headers:
+      X-Region: us
+  local:
+    command: echo
+`)
+	if _, err := app.Run(dir, nil); err != nil {
+		t.Fatalf("sync HTTP MCP: %v", err)
+	}
+	for _, target := range []string{".mcp.json", ".kiro/settings/mcp.json"} {
+		var doc struct {
+			MCPServers map[string]map[string]any `json:"mcpServers"`
+		}
+		contents, err := os.ReadFile(filepath.Join(dir, target))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal(contents, &doc); err != nil {
+			t.Fatal(err)
+		}
+		docs := doc.MCPServers["docs"]
+		if docs["url"] != "https://example.com/mcp" || docs["command"] != nil {
+			t.Fatalf("%s: wrong HTTP entry: %+v", target, docs)
+		}
+		headers := docs["headers"].(map[string]any)
+		if headers["Authorization"] != "Bearer ${DOCS_TOKEN}" || headers["X-Region"] != "us" {
+			t.Fatalf("%s: wrong headers: %+v", target, headers)
+		}
+		if doc.MCPServers["local"]["command"] != "echo" {
+			t.Fatalf("%s: local server lost", target)
+		}
+	}
+	assertFileContains(t, filepath.Join(dir, ".mcp.json"), `"type": "http"`)
+	assertFileContains(t, filepath.Join(dir, ".codex/config.toml"), `url = "https://example.com/mcp"`)
+	assertFileContains(t, filepath.Join(dir, ".codex/config.toml"), `bearer_token_env_var = "DOCS_TOKEN"`)
+	assertFileContains(t, filepath.Join(dir, ".codex/config.toml"), `[mcp_servers.docs.http_headers]`)
+	assertFileContains(t, filepath.Join(dir, ".codex/config.toml"), `command = "echo"`)
+}
+
 func TestMalformedMCPYAMLReturnsParseError(t *testing.T) {
 	dir := t.TempDir()
 	writeCanonicalSource(t, dir)
@@ -1347,11 +1392,11 @@ func fakeClaudeOnPath(t *testing.T, script string) {
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
 
-func seedInstalledPlugins(t *testing.T, home string, names ...string) {
+func seedInstalledPlugins(t *testing.T, home, project string, names ...string) {
 	t.Helper()
 	plugins := map[string][]map[string]string{}
 	for _, name := range names {
-		plugins[name] = []map[string]string{{"scope": "project"}}
+		plugins[name] = []map[string]string{{"scope": "project", "projectPath": project}}
 	}
 	data := map[string]any{"version": 2, "plugins": plugins}
 	contents, err := json.Marshal(data)
@@ -1414,7 +1459,7 @@ func TestSyncSkipsPluginInstallWhenAlreadyInstalled(t *testing.T) {
 	writeFile(t, dir, ".ai/plugins.yaml", "plugins:\n  mattpocock-skills@mattpocock: true\n")
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	seedInstalledPlugins(t, home, "mattpocock-skills@mattpocock")
+	seedInstalledPlugins(t, home, dir, "mattpocock-skills@mattpocock")
 	t.Setenv("PATH", t.TempDir())
 
 	out, err := app.Run(dir, nil)
@@ -1426,6 +1471,21 @@ func TestSyncSkipsPluginInstallWhenAlreadyInstalled(t *testing.T) {
 	}
 	if strings.Contains(out, "installed mattpocock-skills@mattpocock") {
 		t.Fatalf("did not expect a real install, got %q", out)
+	}
+}
+
+func TestSyncInstallsPluginWhenOnlyAnotherProjectHasIt(t *testing.T) {
+	dir := t.TempDir()
+	writeCanonicalSource(t, dir)
+	writeFile(t, dir, ".ai/plugins.yaml", "plugins:\n  mattpocock-skills@mattpocock: true\n")
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	seedInstalledPlugins(t, home, t.TempDir(), "mattpocock-skills@mattpocock")
+	fakeClaudeOnPath(t, "exit 0")
+
+	out, err := app.Run(dir, nil)
+	if err != nil || !strings.Contains(out, "installed mattpocock-skills@mattpocock") {
+		t.Fatalf("plugin in another project should not satisfy this project: %s, %v", out, err)
 	}
 }
 

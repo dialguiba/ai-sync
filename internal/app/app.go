@@ -48,6 +48,12 @@ func RunWithBuildInfo(workdir string, args []string, build BuildInfo) (string, e
 	if len(args) > 0 && args[0] == "inventory" {
 		return inventoryProject(workdir, args[1:])
 	}
+	if len(args) > 0 && args[0] == "catalog" {
+		return serveCatalog(workdir, args[1:])
+	}
+	if len(args) > 0 && args[0] == "tui" {
+		return catalogTUICommand(workdir, args[1:])
+	}
 	if len(args) > 0 && args[0] == "plugins" {
 		return installPlugins(workdir, args[1:])
 	}
@@ -126,6 +132,14 @@ func RunWithBuildInfo(workdir string, args []string, build BuildInfo) (string, e
 }
 
 func installPlugins(workdir string, args []string) (string, error) {
+	if len(args) > 0 {
+		switch args[0] {
+		case "tui":
+			return pluginTUICommand(workdir, args[1:])
+		case "status", "updates", "add", "update", "remove":
+			return managePlugins(workdir, args)
+		}
+	}
 	if len(args) > 0 && args[0] == "preview" {
 		return previewPlugins(workdir, args[1:])
 	}
@@ -382,7 +396,15 @@ Usage:
   ai-sync convention
   ai-sync list
   ai-sync inventory <project-dir>
+  ai-sync catalog [--orca] <project-dir>
+  ai-sync tui <project-dir>
   ai-sync plugins [--scope project|user|local] [--dry-run]
+  ai-sync plugins tui <project-dir>
+  ai-sync plugins status <project-dir>
+  ai-sync plugins updates <project-dir> [--refresh]
+  ai-sync plugins add <project-dir> <plugin@marketplace> --target claude [--repo owner/repo|--url URL|--path PATH]
+  ai-sync plugins update <project-dir> <plugin@marketplace> --target claude
+  ai-sync plugins remove <project-dir> <plugin@marketplace> --target claude
   ai-sync plugins preview <project-dir> --target codex|kiro
   ai-sync plugins apply <project-dir> --target codex|kiro --fingerprint <fingerprint> (--all | --plugin <name>)
   ai-sync clean --dry-run
@@ -394,7 +416,9 @@ Commands:
   convention        print the .ai authoring convention for humans or AI agents
   list              print generated file paths without writing files
   inventory         print a read-only JSON inventory of a project's .ai/
-  plugins           install Claude plugins, or preview and apply Codex/Kiro plugin actions
+  catalog           browse that inventory locally, optionally in Orca
+  tui               browse projects and resources in the terminal
+  plugins           manage Claude plugins, inspect all variants, or preview and apply Codex/Kiro actions
   clean             remove ai-sync generated files so the next sync starts fresh
   version           print version and build metadata
 
@@ -411,8 +435,17 @@ Examples:
   ai-sync convention
   ai-sync list
   ai-sync inventory /path/to/project
+  ai-sync catalog --orca /path/to/project
+  ai-sync tui /path/to/project
   ai-sync plugins
   ai-sync plugins --dry-run
+  ai-sync plugins status .
+  ai-sync plugins tui .
+  ai-sync plugins updates .
+  ai-sync plugins updates . --refresh
+  ai-sync plugins add . toolkit@tools --target claude --repo example/tools
+  ai-sync plugins update . toolkit@tools --target claude
+  ai-sync plugins remove . toolkit@tools --target claude
   ai-sync plugins preview . --target kiro
   ai-sync plugins apply . --target kiro --fingerprint <fingerprint> --all
   ai-sync clean --dry-run
@@ -522,9 +555,12 @@ type mcpConfig struct {
 }
 
 type mcpServer struct {
-	Command string            `yaml:"command"`
-	Args    []string          `yaml:"args"`
-	Env     map[string]string `yaml:"env"`
+	Command           string            `yaml:"command"`
+	Args              []string          `yaml:"args"`
+	Env               map[string]string `yaml:"env"`
+	URL               string            `yaml:"url"`
+	Headers           map[string]string `yaml:"headers"`
+	BearerTokenEnvVar string            `yaml:"bearer_token_env_var"`
 }
 
 type pluginConfig struct {
@@ -632,6 +668,11 @@ func loadSource(workdir string) (source, error) {
 	}
 	if mcp.Servers == nil {
 		mcp.Servers = map[string]mcpServer{}
+	}
+	for name, server := range mcp.Servers {
+		if err := validateMCPServerSource(server); err != nil {
+			return source{}, fmt.Errorf(".ai/mcp.yaml server %q: %w", name, err)
+		}
 	}
 
 	plugins, err := loadPlugins(filepath.Join(root, "plugins.yaml"))
@@ -811,22 +852,17 @@ func loadPlugins(path string) (pluginConfig, error) {
 	return config, nil
 }
 
-func isPluginInstalled(name string) bool {
-	home, err := os.UserHomeDir()
+func isPluginInstalled(name, project string) bool {
+	installed, err := readInstalledClaudePlugins()
 	if err != nil {
 		return false
 	}
-	contents, err := os.ReadFile(filepath.Join(home, ".claude", "plugins", "installed_plugins.json"))
-	if err != nil {
-		return false
+	for _, entry := range installed[name] {
+		if entry.Scope == "project" && sameProjectPath(entry.ProjectPath, project) {
+			return true
+		}
 	}
-	var installed struct {
-		Plugins map[string][]json.RawMessage `json:"plugins"`
-	}
-	if err := json.Unmarshal(contents, &installed); err != nil {
-		return false
-	}
-	return len(installed.Plugins[name]) > 0
+	return false
 }
 
 func runPluginInstalls(workdir string, config pluginConfig, scope string, checkInstalled bool, requireClaude bool, dryRun bool) ([]string, error) {
@@ -852,7 +888,7 @@ func runPluginInstalls(workdir string, config pluginConfig, scope string, checkI
 			changes = append(changes, "skipped "+name+" (disabled in .ai/plugins.yaml)")
 			continue
 		}
-		if checkInstalled && isPluginInstalled(name) {
+		if checkInstalled && isPluginInstalled(name, workdir) {
 			changes = append(changes, "ok "+name)
 			continue
 		}
@@ -1133,7 +1169,7 @@ func renderClaude(source source) ([]generatedFile, error) {
 	files := []generatedFile{
 		{Path: "CLAUDE.md", Content: renderGuidance("Claude Code", source.Project, source.Targets["claude"], nil)},
 		{Path: ".claude/settings.json", Content: renderClaudeSettings(source.Plugins, source.Hooks)},
-		{Path: ".mcp.json", Content: mustJSON(map[string]any{"mcpServers": mcpServersJSON(source.MCP)})},
+		{Path: ".mcp.json", Content: mustJSON(map[string]any{"mcpServers": mcpServersJSON(source.MCP, true)})},
 	}
 	for _, rule := range source.Rules {
 		files = append(files, generatedFile{Path: filepath.ToSlash(filepath.Join(".claude/rules", rule.Name+".md")), Content: renderClaudeRule(rule)})
@@ -1305,7 +1341,7 @@ func renderCodexScopedAgentsManifest(files []generatedFile) []byte {
 func renderKiro(source source) ([]generatedFile, error) {
 	files := []generatedFile{
 		{Path: ".kiro/steering/project-conventions.md", Content: renderGuidance("Kiro", source.Project, source.Targets["kiro"], nil)},
-		{Path: ".kiro/settings/mcp.json", Content: mustJSON(map[string]any{"mcpServers": mcpServersJSON(source.MCP)})},
+		{Path: ".kiro/settings/mcp.json", Content: mustJSON(map[string]any{"mcpServers": mcpServersJSON(source.MCP, false)})},
 	}
 	for _, rule := range source.Rules {
 		files = append(files, generatedFile{Path: filepath.ToSlash(filepath.Join(".kiro/steering", rule.Name+".md")), Content: renderKiroSteeringRule(rule)})
@@ -1392,6 +1428,28 @@ func renderCodexConfig(mcp mcpConfig) []byte {
 		b.WriteString("\n[mcp_servers.")
 		b.WriteString(tomlBareKey(name))
 		b.WriteString("]\n")
+		if server.URL != "" {
+			b.WriteString("url = ")
+			b.WriteString(tomlString(server.URL))
+			b.WriteString("\n")
+			if server.BearerTokenEnvVar != "" {
+				b.WriteString("bearer_token_env_var = ")
+				b.WriteString(tomlString(server.BearerTokenEnvVar))
+				b.WriteString("\n")
+			}
+			if len(server.Headers) > 0 {
+				b.WriteString("[mcp_servers.")
+				b.WriteString(tomlBareKey(name))
+				b.WriteString(".http_headers]\n")
+				for _, key := range sortedMapKeys(server.Headers) {
+					b.WriteString(tomlBareKey(key))
+					b.WriteString(" = ")
+					b.WriteString(tomlString(server.Headers[key]))
+					b.WriteString("\n")
+				}
+			}
+			continue
+		}
 		b.WriteString("command = ")
 		b.WriteString(tomlString(server.Command))
 		b.WriteString("\n")
@@ -1830,10 +1888,28 @@ func mustJSON(value any) []byte {
 	return append(contents, '\n')
 }
 
-func mcpServersJSON(mcp mcpConfig) map[string]any {
+func mcpServersJSON(mcp mcpConfig, claude bool) map[string]any {
 	servers := map[string]any{}
 	for _, name := range sortedServerNames(mcp.Servers) {
 		server := mcp.Servers[name]
+		if server.URL != "" {
+			entry := map[string]any{"url": server.URL}
+			if claude {
+				entry["type"] = "http"
+			}
+			headers := map[string]string{}
+			for key, value := range server.Headers {
+				headers[key] = value
+			}
+			if server.BearerTokenEnvVar != "" {
+				headers["Authorization"] = "Bearer ${" + server.BearerTokenEnvVar + "}"
+			}
+			if len(headers) > 0 {
+				entry["headers"] = headers
+			}
+			servers[name] = entry
+			continue
+		}
 		entry := map[string]any{"command": server.Command}
 		if len(server.Args) > 0 {
 			entry["args"] = server.Args

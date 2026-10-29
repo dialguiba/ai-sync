@@ -130,8 +130,8 @@ func inventoryProject(workdir string, args []string) (string, error) {
 					result.Diagnostics = append(result.Diagnostics, inventoryDiagnostic{Path: mcpPath, Unit: name, Message: err.Error()})
 					return
 				}
-				if strings.TrimSpace(server.Command) == "" {
-					result.Diagnostics = append(result.Diagnostics, inventoryDiagnostic{Path: mcpPath, Unit: name, Message: "server command must not be empty"})
+				if err := validateMCPServerSource(server); err != nil {
+					result.Diagnostics = append(result.Diagnostics, inventoryDiagnostic{Path: mcpPath, Unit: name, Message: err.Error()})
 					return
 				}
 				result.Resources = append(result.Resources, inventoryResource{
@@ -514,7 +514,7 @@ func inventoryYAMLSection(root *yaml.Node, name string) (*yaml.Node, error) {
 
 func decodeInventoryMCPServer(value *yaml.Node, server *mcpServer) error {
 	if value.Kind != yaml.MappingNode {
-		return errors.New("server: expected a mapping with a command")
+		return errors.New("server: expected a mapping with a command or url")
 	}
 	seen := map[string]bool{}
 	for i := 0; i < len(value.Content); i += 2 {
@@ -531,6 +531,12 @@ func decodeInventoryMCPServer(value *yaml.Node, server *mcpServer) error {
 			err = item.Decode(&server.Args)
 		case "env":
 			err = item.Decode(&server.Env)
+		case "url":
+			err = item.Decode(&server.URL)
+		case "headers":
+			err = item.Decode(&server.Headers)
+		case "bearer_token_env_var":
+			err = item.Decode(&server.BearerTokenEnvVar)
 		}
 		if err != nil {
 			return fmt.Errorf("%s: %w", field, err)
