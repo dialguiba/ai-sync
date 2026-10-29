@@ -610,8 +610,9 @@ type ruleFrontmatter struct {
 }
 
 type skill struct {
-	Name  string
-	Files map[string][]byte
+	Name       string
+	Files      map[string][]byte
+	Executable map[string]bool
 }
 
 type agent struct {
@@ -620,8 +621,9 @@ type agent struct {
 }
 
 type generatedFile struct {
-	Path    string
-	Content []byte
+	Path       string
+	Content    []byte
+	Executable bool
 }
 
 func initSource(workdir string) (string, error) {
@@ -1099,6 +1101,7 @@ func loadSkills(root string) ([]skill, error) {
 		}
 		name := entry.Name()
 		files := map[string][]byte{}
+		executable := map[string]bool{}
 		skillRoot := filepath.Join(root, name)
 		if err := filepath.WalkDir(skillRoot, func(path string, d fs.DirEntry, err error) error {
 			if err != nil {
@@ -1115,12 +1118,17 @@ func loadSkills(root string) ([]skill, error) {
 			if err != nil {
 				return err
 			}
+			info, err := d.Info()
+			if err != nil {
+				return err
+			}
 			files[filepath.ToSlash(rel)] = contents
+			executable[filepath.ToSlash(rel)] = info.Mode().Perm()&0o111 != 0
 			return nil
 		}); err != nil {
 			return nil, fmt.Errorf("read skill %s: %w", name, err)
 		}
-		skills = append(skills, skill{Name: name, Files: files})
+		skills = append(skills, skill{Name: name, Files: files, Executable: executable})
 	}
 	sort.Slice(skills, func(i, j int) bool { return skills[i].Name < skills[j].Name })
 	return skills, nil
@@ -1556,7 +1564,7 @@ func copySkills(skills []skill, base string, renameSkillFile bool) []generatedFi
 			if rel == "SKILL.md" {
 				content = withGeneratedHeaderAfterFrontmatter(content)
 			}
-			files = append(files, generatedFile{Path: filepath.ToSlash(filepath.Join(base, sourceSkill.Name, outRel)), Content: content})
+			files = append(files, generatedFile{Path: filepath.ToSlash(filepath.Join(base, sourceSkill.Name, outRel)), Content: content, Executable: sourceSkill.Executable[rel]})
 		}
 	}
 	return files
@@ -1900,7 +1908,7 @@ func applyOutputs(workdir string, outputs []generatedFile, dryRun bool) ([]strin
 	for _, output := range outputs {
 		path := filepath.Join(workdir, filepath.FromSlash(output.Path))
 		current, err := os.ReadFile(path)
-		if err == nil && bytes.Equal(current, output.Content) {
+		if err == nil && bytes.Equal(current, output.Content) && hasExecutableBit(path) == output.Executable {
 			continue
 		}
 		if err != nil && !os.IsNotExist(err) {
@@ -1916,13 +1924,25 @@ func applyOutputs(workdir string, outputs []generatedFile, dryRun bool) ([]strin
 			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 				return nil, fmt.Errorf("mkdir %s: %w", filepath.ToSlash(filepath.Dir(path)), err)
 			}
-			if err := os.WriteFile(path, output.Content, 0o644); err != nil {
+			mode := os.FileMode(0o644)
+			if output.Executable {
+				mode = 0o755
+			}
+			if err := os.WriteFile(path, output.Content, mode); err != nil {
 				return nil, fmt.Errorf("write %s: %w", output.Path, err)
+			}
+			if err := os.Chmod(path, mode); err != nil {
+				return nil, fmt.Errorf("chmod %s: %w", output.Path, err)
 			}
 		}
 		changes = append(changes, verb+" "+output.Path)
 	}
 	return changes, nil
+}
+
+func hasExecutableBit(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.Mode().Perm()&0o111 != 0
 }
 
 func hasGeneratedMarker(contents []byte) bool {

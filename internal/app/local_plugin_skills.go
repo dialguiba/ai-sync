@@ -91,7 +91,7 @@ func prefixPluginSkill(pluginName string, original skill, siblings []string) (sk
 		}
 		files[rel] = []byte(text)
 	}
-	return skill{Name: name, Files: files}, nil
+	return skill{Name: name, Files: files, Executable: original.Executable}, nil
 }
 
 const maxSkillNameLength = 64
@@ -158,7 +158,7 @@ func withReferencedAgents(pluginName string, original skill, agents []agent) ski
 	if len(spawned) > 0 {
 		files["SKILL.md"] = append(append([]byte(nil), files["SKILL.md"]...), outsideClaudeNote(spawned)...)
 	}
-	return skill{Name: original.Name, Files: files}
+	return skill{Name: original.Name, Files: files, Executable: original.Executable}
 }
 
 // Codex gives a spawned subagent the whole parent conversation unless
