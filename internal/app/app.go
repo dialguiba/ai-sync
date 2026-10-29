@@ -57,6 +57,9 @@ func RunWithBuildInfo(workdir string, args []string, build BuildInfo) (string, e
 	if len(args) > 0 && args[0] == "plugins" {
 		return installPlugins(workdir, args[1:])
 	}
+	if len(args) > 0 && args[0] == "sources" {
+		return manageSources(workdir, args[1:])
+	}
 	if len(args) > 0 && args[0] == "clean" {
 		return cleanGeneratedFiles(workdir, args[1:])
 	}
@@ -407,6 +410,11 @@ Usage:
   ai-sync plugins remove <project-dir> <plugin@marketplace> --target claude
   ai-sync plugins preview <project-dir> --target codex|kiro
   ai-sync plugins apply <project-dir> --target codex|kiro --fingerprint <fingerprint> (--all | --plugin <name>)
+  ai-sync sources sync <project-dir> [--force]
+  ai-sync sources add <project-dir> <source> <skill>... [--git URL] [--ref COMMIT] [--subdir DIR]
+  ai-sync sources available <project-dir> <source>
+  ai-sync sources updates <project-dir>
+  ai-sync sources update <project-dir> <source> [--ref COMMIT]
   ai-sync clean --dry-run
   ai-sync clean --force
   ai-sync version
@@ -419,6 +427,7 @@ Commands:
   catalog           browse that inventory locally, optionally in Orca
   tui               browse projects and resources in the terminal
   plugins           manage Claude plugins, inspect all variants, or preview and apply Codex/Kiro actions
+  sources           vendor pinned skills from other Git repositories into .ai/skills
   clean             remove ai-sync generated files so the next sync starts fresh
   version           print version and build metadata
 
@@ -448,6 +457,9 @@ Examples:
   ai-sync plugins remove . toolkit@tools --target claude
   ai-sync plugins preview . --target kiro
   ai-sync plugins apply . --target kiro --fingerprint <fingerprint> --all
+  ai-sync sources add . pstack statechart --git https://github.com/backnotprop/pstack
+  ai-sync sources updates .
+  ai-sync sources update . pstack
   ai-sync clean --dry-run
   ai-sync clean --force
   ai-sync version
@@ -479,6 +491,7 @@ Use .ai/ as the single source of truth for AI-agent configuration. Do not create
   project.md
   mcp.yaml
   plugins.yaml
+  sources.yaml
   hooks.yaml
   setup.yaml
   targets/
@@ -504,6 +517,7 @@ Use .ai/ as the single source of truth for AI-agent configuration. Do not create
 | .ai/project.md | Shared project rules, architecture, commands, conventions, and review expectations. |
 | .ai/mcp.yaml | Shared MCP server definitions. Reference environment variables instead of hardcoding secrets. |
 | .ai/plugins.yaml | Optional Claude marketplaces and portable plugin declarations with per-target package sources. |
+| .ai/sources.yaml | Optional skills copied from other Git repositories, each source pinned to one commit. Managed with ai-sync sources; plain ai-sync never fetches them. |
 | .ai/hooks.yaml | Optional Claude Code hooks (event name to matcher and command). |
 | .ai/setup.yaml | Optional per-machine bootstrap commands (name to check and install). Runs on every ai-sync. |
 | .ai/targets/claude.md | Claude Code-specific guidance only. |

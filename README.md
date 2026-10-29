@@ -499,3 +499,30 @@ go run ./cmd/ai-sync clean --dry-run
 Kiro Powers are generated as valid importable folders. `ai-sync` does not install or register them in the local Kiro app.
 
 Codex scoped rules are directory-based, not full glob-based. When a glob has no stable directory prefix, the rule is kept in the root `AGENTS.md` as the safest available Codex scope.
+
+### 🔗 Skills from other repositories
+
+Declare skills that live in another Git repository in `.ai/sources.yaml`. Each source pins one commit, and `ai-sync` copies the listed skills into `.ai/skills/`:
+
+```yaml
+sources:
+  pstack:
+    git: https://github.com/backnotprop/pstack
+    ref: 25abb38559ddbabec563646224d09eff9a250eca
+    skills:
+      - statechart
+      - create-formal-verification-skill
+```
+
+The skills must sit at `skills/<name>/SKILL.md` in the repository, or under `subdir` when you set it. `ref` must be a full commit hash so the copies are reproducible. Plain `ai-sync` never touches the network. Only the `sources` commands do:
+
+```sh
+ai-sync sources add . pstack tdd                      # add a skill to a declared source, at its pinned commit
+ai-sync sources add . other tdd --git <url>           # declare a new source, pinned to the remote HEAD
+ai-sync sources available . pstack                    # list the skills the repository offers
+ai-sync sources updates .                             # which listed skills changed upstream
+ai-sync sources update . pstack                       # move the pin to the remote HEAD and refresh the skills
+ai-sync sources sync .                                # restore the skills at their pinned commits
+```
+
+`ai-sync` records a hash of each copied skill in `.ai/sources.lock.yaml`. A skill that you edited, or one with the same name that sources did not copy, is never overwritten unless you pass `--force`. `sources add` also warns when a copied skill links to a sibling skill (`../other/`) that is not in `.ai/skills/`. Rewriting `sources.yaml` drops any comments in it.
