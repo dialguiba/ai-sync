@@ -540,6 +540,7 @@ type options struct {
 }
 
 type source struct {
+	Root    string
 	Project string
 	Targets map[string]string
 	Rules   []pathRule
@@ -548,6 +549,8 @@ type source struct {
 	Hooks   hooksConfig
 	Agents  []agent
 	Skills  []skill
+	// Skills of local plugins. Claude loads them through the plugin itself.
+	PluginSkills []skill
 }
 
 type mcpConfig struct {
@@ -708,8 +711,12 @@ func loadSource(workdir string) (source, error) {
 	if err != nil {
 		return source{}, err
 	}
+	pluginSkills, err := loadLocalPluginSkills(workdir, plugins, skills)
+	if err != nil {
+		return source{}, err
+	}
 
-	return source{Project: project, Targets: targets, Rules: rules, MCP: mcp, Plugins: plugins, Hooks: hooks, Agents: agents, Skills: skills}, nil
+	return source{Root: workdir, Project: project, Targets: targets, Rules: rules, MCP: mcp, Plugins: plugins, Hooks: hooks, Agents: agents, Skills: skills, PluginSkills: pluginSkills}, nil
 }
 
 func readRequiredText(path string) (string, error) {
@@ -865,6 +872,25 @@ func isPluginInstalled(name, project string) bool {
 	return false
 }
 
+// Claude Code does not register a marketplace that only appears in
+// extraKnownMarketplaces, so `plugin install` fails with "not found in
+// marketplace" until `marketplace add` has run. GitHub marketplaces get
+// registered on first install; directory ones never do.
+func addLocalMarketplace(claudePath, workdir string, config pluginConfig, identity, scope string) error {
+	_, marketplaceName, _ := strings.Cut(identity, "@")
+	marketplace := config.Marketplaces[marketplaceName]
+	if resolveMarketplaceSource(marketplace) != "path" {
+		return nil
+	}
+	path := absoluteMarketplacePath(marketplace.Path, workdir)
+	command := exec.Command(claudePath, "plugin", "marketplace", "add", path, "--scope", scope)
+	command.Dir = workdir
+	if output, err := command.CombinedOutput(); err != nil {
+		return fmt.Errorf("claude plugin marketplace add %s: %w\n%s", path, err, strings.TrimSpace(string(output)))
+	}
+	return nil
+}
+
 func runPluginInstalls(workdir string, config pluginConfig, scope string, checkInstalled bool, requireClaude bool, dryRun bool) ([]string, error) {
 	if len(config.Plugins) == 0 {
 		return nil, nil
@@ -903,6 +929,11 @@ func runPluginInstalls(workdir string, config pluginConfig, scope string, checkI
 				return changes, errors.New("claude not found in PATH; the Claude Code CLI installs the plugins that .ai/plugins.yaml declares")
 			}
 			changes = append(changes, "skipped "+name+" (claude not found in PATH)")
+			continue
+		}
+		if err := addLocalMarketplace(claudePath, workdir, config, name, scope); err != nil {
+			errs = append(errs, err)
+			changes = append(changes, "failed "+name)
 			continue
 		}
 		command := exec.Command(claudePath, installArgs...)
@@ -1157,18 +1188,23 @@ func renderTarget(target string, source source) ([]generatedFile, error) {
 	case "claude":
 		return renderClaude(source)
 	case "codex":
-		return renderCodex(source)
+		return renderCodex(withPluginSkills(source))
 	case "kiro":
-		return renderKiro(source)
+		return renderKiro(withPluginSkills(source))
 	default:
 		return nil, fmt.Errorf("unknown target %q", target)
 	}
 }
 
+func withPluginSkills(source source) source {
+	source.Skills = append(append([]skill(nil), source.Skills...), source.PluginSkills...)
+	return source
+}
+
 func renderClaude(source source) ([]generatedFile, error) {
 	files := []generatedFile{
 		{Path: "CLAUDE.md", Content: renderGuidance("Claude Code", source.Project, source.Targets["claude"], nil)},
-		{Path: ".claude/settings.json", Content: renderClaudeSettings(source.Plugins, source.Hooks)},
+		{Path: ".claude/settings.json", Content: renderClaudeSettings(source.Plugins, source.Hooks, source.Root)},
 		{Path: ".mcp.json", Content: mustJSON(map[string]any{"mcpServers": mcpServersJSON(source.MCP, true)})},
 	}
 	for _, rule := range source.Rules {
@@ -1181,7 +1217,7 @@ func renderClaude(source source) ([]generatedFile, error) {
 	return files, nil
 }
 
-func renderClaudeSettings(config pluginConfig, hooks hooksConfig) []byte {
+func renderClaudeSettings(config pluginConfig, hooks hooksConfig, root string) []byte {
 	settings := map[string]any{"permissions": map[string]any{}}
 	if len(hooks) > 0 {
 		settings["hooks"] = hooks
@@ -1189,7 +1225,7 @@ func renderClaudeSettings(config pluginConfig, hooks hooksConfig) []byte {
 	if len(config.Marketplaces) > 0 {
 		marketplaces := map[string]any{}
 		for _, name := range sortedStringMapKeys(config.Marketplaces) {
-			marketplaces[name] = map[string]any{"source": marketplaceSourceJSON(config.Marketplaces[name])}
+			marketplaces[name] = map[string]any{"source": marketplaceSourceJSON(config.Marketplaces[name], root)}
 		}
 		settings["extraKnownMarketplaces"] = marketplaces
 	}
@@ -1210,7 +1246,9 @@ func renderClaudeSettings(config pluginConfig, hooks hooksConfig) []byte {
 	return mustJSON(settings)
 }
 
-func marketplaceSourceJSON(marketplace marketplaceSource) map[string]any {
+// Claude Code only loads "directory" sources, and it ignores a relative path
+// in settings.json, so the path is anchored to the project root here.
+func marketplaceSourceJSON(marketplace marketplaceSource, root string) map[string]any {
 	source := resolveMarketplaceSource(marketplace)
 	entry := map[string]any{"source": source}
 	switch source {
@@ -1219,9 +1257,20 @@ func marketplaceSourceJSON(marketplace marketplaceSource) map[string]any {
 	case "url":
 		entry["url"] = marketplace.URL
 	case "path":
-		entry["path"] = marketplace.Path
+		entry["source"] = "directory"
+		entry["path"] = absoluteMarketplacePath(marketplace.Path, root)
 	}
 	return entry
+}
+
+func absoluteMarketplacePath(path, root string) string {
+	if filepath.IsAbs(path) {
+		return path
+	}
+	if absRoot, err := filepath.Abs(root); err == nil {
+		return filepath.Join(absRoot, path)
+	}
+	return filepath.Join(root, path)
 }
 
 func renderClaudeRule(rule pathRule) []byte {

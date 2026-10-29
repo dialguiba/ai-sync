@@ -61,3 +61,19 @@ The command re-inspects the project and compares the fingerprint with `--fingerp
 A real `native_identity` or `package.path` collision cancels the whole apply with an error, without running any installer, until an owner or a different identity is chosen. `incompatible` and `unverified` variants are reported with their reason and are not installed: a Git source is still not downloaded during the apply. A `partial` package stays `pending` because partial installation needs a prepared and validated target-specific package, which is not produced yet; that is why there is no acceptance that forces it.
 
 For Kiro, a `compatible` local variant runs `kiro-cli powers install <absolute path>`. For Codex, the apply runs nothing: it returns the concrete marketplace registration and `codex plugin add` instructions as `manual`, because installation happens inside the agent. No disabled variant is applied, and the apply does not install plugins during ordinary sync: copying `.ai/` and running `ai-sync` remain separate actions from installing plugins.
+
+## Local plugins in Codex and Kiro
+
+A plugin from a `path:` marketplace is a Claude plugin for Claude. For Codex and Kiro, `ai-sync` copies its `skills/` into `.agents/skills/` and `.kiro/skills/` and installs nothing. Both tools install plugins per user (`~/.codex/plugins/cache`, `~/.kiro/powers`), so installing from a sync would change the global config of every project.
+
+The skills are renamed `<plugin>-<skill>`, because Agent Skills names allow only lowercase letters, digits and hyphens. Inside the copied files, `<plugin>:` followed by a letter or `$` becomes `<plugin>-`, and `../<sibling>/` becomes `../<plugin>-<sibling>/`. `agents/` stays Claude-only.
+
+### TODO: choose the active plugins per project
+
+Not solved. What the tools allow today:
+
+- Claude: native, `--scope project`.
+- Codex: the install is per user, but the project's `.codex/config.toml` (trusted projects only) can set `[plugins."<name>@<marketplace>"] enabled = false`. That is a deny list, so it needs the names of the plugins to turn off. Not tested at runtime. `codex plugin list` still showed `not installed` for a plugin that the project config only marked as enabled.
+- Kiro: Powers have no project location (`~/.kiro/powers/` only). The configuration docs show an `includePowers` field for agents, which may work as an allow list from a project agent in `.kiro/agents/`. Not tested.
+
+Next step: try both mechanisms in a real session before designing a `plugins.yaml` field for "only these plugins in this project".

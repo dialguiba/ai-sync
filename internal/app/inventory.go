@@ -161,7 +161,7 @@ func inventoryProject(workdir string, args []string) (string, error) {
 					result.Diagnostics = append(result.Diagnostics, inventoryDiagnostic{Path: pluginsPath, Unit: name, Message: err.Error()})
 					return
 				}
-				result.PluginConfiguration.Marketplaces[name] = marketplaceSourceJSON(marketplace)
+				result.PluginConfiguration.Marketplaces[name] = marketplaceSourceJSON(marketplace, project)
 				if err := validateMarketplace(name, marketplace); err != nil {
 					result.Diagnostics = append(result.Diagnostics, inventoryDiagnostic{Path: pluginsPath, Unit: name, Message: err.Error()})
 				}

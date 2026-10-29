@@ -1139,8 +1139,8 @@ env:
 		`"PONYTAIL_DEFAULT_MODE": "off"`,
 		`"extraKnownMarketplaces"`,
 		`"local-lab"`,
-		`"path": "../plugin-lab"`,
-		`"source": "path"`,
+		`"path": "` + filepath.Join(filepath.Dir(dir), "plugin-lab") + `"`,
+		`"source": "directory"`,
 		`"mattpocock"`,
 		`"repo": "mattpocock/skills"`,
 		`"source": "github"`,
@@ -1148,6 +1148,35 @@ env:
 	})
 
 	assertFileNotContains(t, filepath.Join(dir, ".codex/config.toml"), "mattpocock")
+}
+
+func TestSyncAnchorsRelativeMarketplacePathToProjectRoot(t *testing.T) {
+	dir := t.TempDir()
+	writeCanonicalSource(t, dir)
+	writeFile(t, dir, ".ai/plugins.yaml", `marketplaces:
+  local:
+    path: ./.ai/plugins-local
+plugins:
+  demo@local: true
+`)
+	t.Setenv("HOME", t.TempDir())
+	calls := filepath.Join(t.TempDir(), "calls")
+	fakeClaudeOnPath(t, `echo "$@" >> "`+calls+`"`)
+
+	if _, err := app.Run(dir, nil); err != nil {
+		t.Fatalf("sync should not return an error: %v", err)
+	}
+
+	assertFileContainsInOrder(t, calls, []string{
+		"plugin marketplace add " + filepath.Join(dir, ".ai/plugins-local") + " --scope project",
+		"plugin install demo@local --scope project",
+	})
+
+	assertFileContainsInOrder(t, filepath.Join(dir, ".claude/settings.json"), []string{
+		`"local"`,
+		`"path": "` + filepath.Join(dir, ".ai/plugins-local") + `"`,
+		`"source": "directory"`,
+	})
 }
 
 func TestSyncKeepsClaudeSettingsMinimalWithoutPluginsFile(t *testing.T) {
