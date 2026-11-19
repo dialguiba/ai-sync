@@ -182,7 +182,15 @@ func inventoryProject(workdir string, args []string) (string, error) {
 					return
 				}
 				if legacy != nil {
-					result.Resources = append(result.Resources, inventoryResource{Type: "plugin", Name: name, Sources: []string{pluginsPath}, Destinations: []string{".claude/settings.json"}, Enabled: legacy})
+					_, market, _ := strings.Cut(name, "@")
+					repo, _ := result.PluginConfiguration.Marketplaces[market]["repo"].(string)
+					var variants []inventoryPluginVariant
+					var diagnostics []inventoryDiagnostic
+					if *legacy {
+						variants, diagnostics = resolvedMarketplaceVariants(project, name, marketplaceSource{Repo: repo}, known)
+					}
+					result.Diagnostics = append(result.Diagnostics, diagnostics...)
+					result.Resources = append(result.Resources, inventoryResource{Type: "plugin", Name: name, Sources: []string{pluginsPath}, Destinations: []string{".claude/settings.json"}, Enabled: legacy, Variants: variants})
 					return
 				}
 				resource := inventoryResource{Type: "plugin", Name: name, Sources: []string{pluginsPath}, Destinations: []string{}, Enabled: &declaration.Enabled}
@@ -190,6 +198,14 @@ func inventoryProject(workdir string, args []string) (string, error) {
 					packageSource, intended := declaration.Targets[target]
 					if !intended {
 						continue
+					}
+					if packageSource.Git != "" && declaration.Enabled {
+						resolved, err := resolveLockedPluginTarget(project, packageSource)
+						if err != nil {
+							result.Diagnostics = append(result.Diagnostics, inventoryDiagnostic{Path: pluginsPath, Unit: name, Message: err.Error()})
+						} else {
+							packageSource = resolved
+						}
 					}
 					variant, diagnostics := inspectPluginTarget(project, name, target, packageSource, known)
 					result.Diagnostics = append(result.Diagnostics, diagnostics...)

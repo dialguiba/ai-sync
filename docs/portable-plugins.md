@@ -28,7 +28,7 @@ plugins:
 
 `enabled` and `targets` are required in a structured entry. Each target needs `path`, `git` or, for Claude only, `install`. `path` is relative to the project and must be inside `.ai/`. `git` is an HTTPS URL with a `ref` of 40 hexadecimal digits that identifies a commit; `subdir` is optional and cannot escape the repository. You can declare `install` together with a local package origin to keep the Claude installation and allow inspection. Two entries cannot claim the same Claude install identity.
 
-The `ai-sync inventory <project-dir>` command inspects local packages without running commands. For Codex and Kiro it looks for the Agent Plugins `plugin.json` at the root, skills in `skills/<name>/SKILL.md` and servers in `mcp.json`. For a Claude-only package it recognizes `.claude-plugin/plugin.json` and `.mcp.json`, and explains why it cannot be used as an Agent Plugins package in Codex or Kiro. A Git source and a marketplace installation without a local copy stay `unverified`: their skill and MCP lists remain empty. Nothing is downloaded during the inventory.
+The `ai-sync inventory <project-dir>` command inspects local packages without running commands. For Codex and Kiro it looks for the Agent Plugins `plugin.json` at the root, skills in `skills/<name>/SKILL.md` and servers in `mcp.json`. For a Claude-only package it recognizes `.claude-plugin/plugin.json` and `.mcp.json`, and explains why it cannot be used as an Agent Plugins package in Codex or Kiro. A Git source that has not been resolved with `plugins sync` and a marketplace installation without a local copy stay `unverified`: their skill and MCP lists remain empty. Nothing is downloaded during the inventory.
 
 Each structured entry produces a single `plugin` resource in `resources`. It keeps `type`, `name`, `sources`, `destinations` and `enabled` from the previous contract and adds `variants`, in the order Claude, Codex, Kiro. Each variant has `target`, `status`, `source`, `skills`, `mcp_servers`, `unsupported` and `requirements`; `manifest`, `package_name` and `version` appear when they can be verified. The statuses are `compatible`, `partial`, `incompatible`, `pending`, `unverified` and `invalid`. A missing local path stays `unverified` with the exact path in `requirements`, so the declaration can be copied without installing it. A package that is present but invalid produces a diagnostic and leaves the overall inventory at `invalid`; `unverified`, `pending`, `partial` and `incompatible` describe compatibility without turning the declaration into invalid YAML.
 
@@ -44,7 +44,7 @@ Format references: [Agent Plugins plugin schema](https://agent-plugins.org/schem
 
 `ai-sync plugins preview <project-dir> --target codex|kiro` returns a JSON object on a single line. The project path is required; the target can only be `codex` or `kiro`. It does not modify files, install packages, run commands or download Git sources. `ai-sync plugins` without `preview` remains the explicit Claude installer. Ordinary sync still copies the declarations and keeps its current behaviour for Claude, without enabling Codex or Kiro plugins.
 
-The object contains `target`, `fingerprint`, `plugins` and `diagnostics`. `plugins` is sorted by logical name and contains only the variants declared for the target. Each element keeps `name`, `enabled`, `package` (the declared origin), `manifest`, `version`, `native_identity` (`plugin.json.name`), `skills`, `mcp_servers`, `omitted_components`, `missing_requirements`, `state`, `action` and `conflicts`. Inventory states are preserved: `compatible`, `partial`, `incompatible`, `pending`, `unverified` or `invalid`. `partial` means the package contains unsupported components; its action is `pending` until a target-specific package is produced and validated. A Git source is not downloaded: it stays `unverified` with no install action. Disabled variants also have no action.
+The object contains `target`, `fingerprint`, `plugins` and `diagnostics`. `plugins` is sorted by logical name and contains only the variants declared for the target. Each element keeps `name`, `enabled`, `package` (the declared origin), `manifest`, `version`, `native_identity` (`plugin.json.name`), `skills`, `mcp_servers`, `omitted_components`, `missing_requirements`, `state`, `action` and `conflicts`. Inventory states are preserved: `compatible`, `partial`, `incompatible`, `pending`, `unverified` or `invalid`. `partial` means the package contains unsupported components; its action is `pending` until a target-specific package is produced and validated. An unresolved Git source is not downloaded: it stays `unverified` with no install action. Resolved Git sources use the locally retained package at their pinned revision. Disabled variants also have no action.
 
 `action.kind` can be `command`, `manual`, `pending`, `blocked` or `none`. A compatible local Kiro variant shows `command: ["kiro-cli", "powers", "install", "<absolute package path>"]`, compatible with Kiro CLI 2.25 or later; in the IDE you can use Powers → Add Custom Power → Import power from a folder. For local Codex, `manual` means creating an entry in `.agents/plugins/marketplace.json` whose `source.path` points to the package relative to the project root, restarting Codex and running `codex plugin add <native_identity>@<marketplace-name>`. The preview does not promise that a loose folder can be installed directly with `codex plugin add`: Codex requires a marketplace. A `native_identity` or `package.path` collision between enabled plugins for the same target sets `action.kind: blocked` for both until you choose owners or different paths and identities. Skills and MCP servers stay inside their plugin; names repeated across packages are not treated as collisions.
 
@@ -77,3 +77,60 @@ Not solved. What the tools allow today:
 - Kiro: Powers have no project location (`~/.kiro/powers/` only). The configuration docs show an `includePowers` field for agents, which may work as an allow list from a project agent in `.kiro/agents/`. Not tested.
 
 Next step: try both mechanisms in a real session before designing a `plugins.yaml` field for "only these plugins in this project".
+
+
+## Remote plugin resolution
+
+`ai-sync plugins sync <project-dir> [--update] [--dry-run]` resolves enabled GitHub
+marketplaces (`repo: owner/repo`) and explicit `targets.<target>.git` variants.
+It downloads package files without running hooks, setup, MCP commands or harness
+installers. Each successfully resolved package is committed to the lock before the next
+repository is attempted, so a later download failure preserves earlier resolved work. Ordinary sync, inventory and preview read these files without fetching.
+
+The first marketplace resolution pins its remote HEAD. Later resolutions reuse that
+commit, including when the upstream repository moves. `--update` explicitly selects
+a new remote HEAD for marketplaces; explicit Git variants retain the `ref` in their
+declaration. The lock records repository, commit and a SHA-256 hash that includes
+file contents and executable bits. Edited retained packages are rejected rather than
+overwritten. Do not edit `.ai/plugins/`: change the upstream package or its declaration.
+Absent package folders can be restored from the lock. Keep `.ai/plugins.lock.yaml`
+and `.ai/plugins/` with the canonical configuration for fully offline copies.
+
+For a marketplace member whose `source` is a relative path, the resolver retains the
+original checkout and prepares an Agent Plugins package. Claude uses the original
+pinned marketplace, including its native components. Codex/Kiro variants contain
+manifest-selected skills at `skills/<name>/`, a normalized `mcp.json`, metadata and
+retained package assets. `${CLAUDE_PLUGIN_ROOT}` becomes a reference to the retained
+package for project skills/MCP, or `${PLUGIN_ROOT}/assets/package` in native packages.
+Executable files keep their modes. Internal file symlinks from Git are materialized;
+links outside the repository and directory symlinks are rejected.
+
+For boolean marketplace entries, ordinary sync projects these skills and supported MCP servers into Codex/Kiro's
+project directories, using `<plugin>-<resource>` names. Structured declarations keep their
+explicit target selection and native preview/apply workflow; a Claude-only declaration
+does not implicitly enable resources in other targets. Generation reports collisions with
+canonical resources instead of selecting a winner. Disabled plugins stop producing
+resources and generated-file manifests prune their old outputs. `--target codex|kiro`
+does not invoke Claude's installer. Claude installation remains automatic only when
+Claude is among the selected targets.
+
+Skills use the paths listed in the Claude manifest; when absent, `skills/` must have
+the standard flat layout. Stdio and HTTP MCP servers are adapted; unsupported
+transports or fields are reported. Native agents are not recreated automatically,
+but agent instructions referenced by a skill are included as reference files.
+Hooks, commands, output styles, LSP servers and custom agent paths have no portable
+adapter. They are retained in the original Claude package and explicitly reported
+as omissions. Native preview marks such packages `partial`, and native apply stays
+`pending`; it does not silently install a reduced plugin. Compatible Codex packages
+retain the existing manual marketplace-registration step; Kiro uses the explicit
+native apply command.
+
+Hosted manifest marketplaces (`url:`) and marketplace members whose `source` is
+another remote repository are not fetched by this resolver. Use a local `path:`
+marketplace or an explicit Git variant for those packages. Defining a marketplace
+alone does not select its plugins: enable the desired entries under `plugins`.
+
+After `plugins sync --update`, ordinary sync refreshes project resources. Run
+`ai-sync plugins` to reinstall Claude packages explicitly: the automatic installation
+check still tests for an existing project installation rather than upgrading it.
+The global activation limitations described above remain unchanged.

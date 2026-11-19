@@ -24,7 +24,7 @@ func loadLocalPluginSkills(workdir string, config pluginConfig, ownSkills []skil
 	for _, identity := range sortedStringMapKeys(config.Plugins) {
 		pluginName, marketplaceName, _ := strings.Cut(identity, "@")
 		marketplace := config.Marketplaces[marketplaceName]
-		if !config.Plugins[identity] || resolveMarketplaceSource(marketplace) != "path" {
+		if !projectPluginEnabled(config, identity) || resolveMarketplaceSource(marketplace) != "path" {
 			continue
 		}
 		pluginDir, err := localPluginDir(absoluteMarketplacePath(marketplace.Path, workdir), pluginName)
@@ -34,14 +34,12 @@ func loadLocalPluginSkills(workdir string, config pluginConfig, ownSkills []skil
 		if err != nil {
 			return nil, fmt.Errorf(".ai/plugins.yaml plugin %q: %w", identity, err)
 		}
-		pluginSkills, err := loadSkills(filepath.Join(pluginDir, "skills"))
+		components, err := readPluginComponents(pluginDir)
+		pluginSkills := components.Skills
 		if err != nil {
 			return nil, fmt.Errorf("plugin %q skills: %w", identity, err)
 		}
-		pluginAgents, err := loadAgents(filepath.Join(pluginDir, "agents"))
-		if err != nil {
-			return nil, fmt.Errorf("plugin %q agents: %w", identity, err)
-		}
+		pluginAgents := components.Agents
 		siblings := make([]string, 0, len(pluginSkills))
 		for _, pluginSkill := range pluginSkills {
 			siblings = append(siblings, pluginSkill.Name)
@@ -50,6 +48,15 @@ func loadLocalPluginSkills(workdir string, config pluginConfig, ownSkills []skil
 			prefixed, err := prefixPluginSkill(pluginName, withReferencedAgents(pluginName, pluginSkill, pluginAgents), siblings)
 			if err != nil {
 				return nil, fmt.Errorf("plugin %q: %w", identity, err)
+			}
+			absoluteRoot, err := filepath.Abs(pluginDir)
+			if err != nil {
+				return nil, err
+			}
+			for rel, content := range prefixed.Files {
+				if utf8.Valid(content) {
+					prefixed.Files[rel] = []byte(strings.ReplaceAll(string(content), "${CLAUDE_PLUGIN_ROOT}", absoluteRoot))
+				}
 			}
 			if taken[prefixed.Name] {
 				return nil, fmt.Errorf("plugin %q skill %q collides with another skill of the same name", identity, prefixed.Name)

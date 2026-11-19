@@ -317,6 +317,35 @@ env:
   PONYTAIL_DEFAULT_MODE: "off"
 ```
 
+For a GitHub marketplace, resolve its packages once before generating all targets:
+
+```sh
+ai-sync plugins sync .           # fetch, pin and prepare; does not install anything
+ai-sync                         # generate project resources and install missing Claude plugins
+ai-sync plugins sync . --update  # explicitly move marketplace pins to their remote HEAD
+```
+
+The declaration remains in `plugins.yaml`. Resolution writes `.ai/plugins.lock.yaml`
+with the exact commits and content hashes and retains the packages under `.ai/plugins/`.
+Commit both with the canonical configuration to allow offline generation on another
+machine. If the package folders are absent, `plugins sync` restores the locked commits.
+After updating, run `ai-sync` to regenerate project resources and `ai-sync plugins`
+to reinstall Claude packages; the automatic Claude check does not upgrade existing installs.
+
+Resolved marketplaces use the pinned local checkout for Claude. For Codex and Kiro,
+ordinary generation copies the skills selected by the plugin manifest, including nested
+paths, and projects its supported MCP servers into each project's configuration. Names
+are qualified as `<plugin>-<resource>`. Plugin resources retain their plugin ownership;
+they are not imported as standalone declarations into `.ai/skills/` or `.ai/mcp.yaml`.
+Referenced Claude agent instructions are bundled with skills. Hooks, commands, native
+agents and other components without an adapter remain in the Claude package and are
+reported explicitly for Codex/Kiro.
+
+`--dry-run`, inventory, preview and ordinary generation never fetch plugin packages.
+An unresolved remote plugin produces a message pointing to `plugins sync` during sync.
+Compatible prepared packages also appear in `plugins preview/apply`; installation
+there remains explicit. See [remote plugin resolution](docs/portable-plugins.md#remote-plugin-resolution).
+
 Each plugin key is `<plugin>@<marketplace>`, the same form `claude plugin install` takes, and its value is the enabled flag. A marketplace takes `repo` for GitHub, `url` for a hosted manifest, or `path` for a local checkout. `source` is inferred from whichever one you set, so declare it explicitly only to override that.
 
 `env` becomes the `env` block of `.claude/settings.json`. Plugins that read their configuration from the environment, such as `PONYTAIL_DEFAULT_MODE`, are configured there.
@@ -385,7 +414,7 @@ This is how a tool that used to ship as a plugin, or that self-installs by writi
 
 ### ⚙️ Setup scripts
 
-Declare per-machine bootstrap commands in `.ai/setup.yaml`. Unlike `.ai/plugins.yaml` (which only takes effect via the separate, opt-in `ai-sync plugins` command), every entry here runs on every plain `ai-sync` invocation — there is no separate command to remember:
+Declare per-machine bootstrap commands in `.ai/setup.yaml`. Every entry here runs on every plain `ai-sync` invocation — there is no separate command to remember:
 
 ```yaml
 code-review-graph:
@@ -514,7 +543,7 @@ sources:
       - create-formal-verification-skill
 ```
 
-The skills must sit at `skills/<name>/SKILL.md` in the repository, or under `subdir` when you set it. `ref` must be a full commit hash so the copies are reproducible. Plain `ai-sync` never touches the network. Only the `sources` commands do:
+The skills must sit at `skills/<name>/SKILL.md` in the repository, or under `subdir` when you set it. `ref` must be a full commit hash so the copies are reproducible. Skill-source downloads only happen through the `sources` commands. Plugin package downloads use `plugins sync`; ordinary generation can also invoke the Claude installer:
 
 ```sh
 ai-sync sources add . pstack tdd                      # add a skill to a declared source, at its pinned commit

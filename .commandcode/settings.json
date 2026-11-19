@@ -1,0 +1,32 @@
+{
+  "permissions": {
+    "allow": [
+      "Shell(orca:*)",
+      "Shell(grep:*)",
+      "Shell(strings:*)",
+      "Shell(which command-code cmd 2>&1; echo \"---\"; ls -la $(which command-code 2>/dev/null) 2>&1; echo \"--- fnm/node bin ---\"; ls /Users/diego.aguirre02/.local/share/fnm/node-versions/v25.2.0/installation/bin/ 2>&1)",
+      "Shell(echo \"shell PATH: $PATH\"; echo \"--- launchd PATH (what GUI apps get) ---\"; launchctl getenv PATH 2>&1; echo \"--- Orca process PATH ---\"; ps eww -o command= $(pgrep -x Orca | head -1) 2>/dev/null | tr ' ' '\\n' | grep -E \"^PATH=\" | head)",
+      "Shell(for:*)",
+      "Shell(do:*)",
+      "Shell(which:*)",
+      "Shell(echo:*)",
+      "Shell(done:*)",
+      "Shell(ls:*)",
+      "Shell(python3 -c  data=open('app.asar','rb').read().decode('latin-1') import re for m in re.finditer('detectAgents', data): i=m.start() print('---', i) print(data[i-300:i+400]) print() )",
+      "Shell(python3 -c  data=open('app.asar','rb').read().decode('latin-1') print(data[1494800:1496200]) )",
+      "Shell(python3 -c  data=open('app.asar','rb').read().decode('latin-1') print(data[1507900:1511200]) )",
+      "Shell(python3 -c  data=open('app.asar','rb').read().decode('latin-1') import re for kw in ['TUI_AGENT_CONFIG','tuiAgents','detectRequiredCommands','installedAgents','detectTuiAgents','TuiAgentDetection','launchCmd']: idxs=[m.start() for m in re.finditer(re.escape(kw), data)] print(repr(kw), len(idxs), idxs[:8]) )",
+      "Shell(python3 -c  data=open('app.asar','rb').read().decode('latin-1') print('=== 7962100 ==='); print(data[7962100:7962900]) print(); print('=== 7959500 ==='); print(data[7959500:7960200]) )",
+      "Shell(python3 -c  data=open('app.asar','rb').read().decode('latin-1') import re for kw in ['Command Code','command-code','CommandCode']: idxs=[m.start() for m in re.finditer(re.escape(kw), data)] print(repr(kw), len(idxs), idxs[:12]) )",
+      "Shell(python3 -c  data=open('app.asar','rb').read().decode('latin-1') print('=== 8007600 ==='); print(data[8007600:8009600]) )",
+      "Shell(python3 -c  data=open('app.asar','rb').read().decode('latin-1') print('=== 6423000 ==='); print(data[6423000:6424200]) print(); print('=== 7961200 ==='); print(data[7961200:7961900]) )",
+      "Shell(python3 -c  data=open('app.asar','rb').read().decode('latin-1') print(data[1905400:1907200]) )",
+      "Shell(python3 -c import sys,json; d=json.load(sys.stdin); print(json.dumps([c.get('command') for c in d.get('commands',[])],indent=0)) 2 >& 1)",
+      "Shell(python3 -c  data=open('app.asar','rb').read().decode('latin-1') print(data[3249900:3251600]) )",
+      "Shell(ls -d ~/Library/Application\\ Support/Orca* ~/Library/Logs/Orca* 2>/dev/null; echo \"---\"; ls ~/Library/Application\\ Support/Orca/logs 2>/dev/null | tail; echo \"--- fnm env in zshrc ---\"; grep -nE \"fnm|command-code|\\.local/bin|PATH=\" ~/.zshrc 2>/dev/null | head -30)",
+      "Shell(fnm list 2>&1 | head; echo \"--- default alias ---\"; ls -la ~/.local/share/fnm/aliases/ 2>&1; cat ~/.local/share/fnm/aliases/default 2>/dev/null; echo \"--- multishells ---\"; ls -dt ~/.local/state/fnm_multishells/*/bin 2>/dev/null | head -5)"
+    ],
+    "deny": [],
+    "defaultMode": "default"
+  }
+}

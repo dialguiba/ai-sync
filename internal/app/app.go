@@ -118,16 +118,24 @@ func RunWithBuildInfo(workdir string, args []string, build BuildInfo) (string, e
 		return strings.Join(changes, "\n") + "\n", err
 	}
 
-	plugins, err := loadPlugins(filepath.Join(workdir, ".ai", "plugins.yaml"))
+	plugins, err := loadResolvedPlugins(workdir)
 	if err != nil {
 		return "", err
 	}
-	pluginChanges, err := runPluginInstalls(workdir, plugins, "project", true, false, opts.dryRun)
+	var pluginChanges []string
+	if opts.target == "" || opts.target == "claude" {
+		pluginChanges, err = runPluginInstalls(workdir, plugins, "project", true, false, opts.dryRun)
+	}
 	changes = append(changes, pluginChanges...)
 	if err != nil {
 		return strings.Join(changes, "\n") + "\n", err
 	}
 
+	notes, err := pluginProjectionNotes(workdir, opts.target)
+	if err != nil {
+		return "", err
+	}
+	changes = append(changes, notes...)
 	if len(changes) == 0 {
 		return "no changes\n", nil
 	}
@@ -137,6 +145,8 @@ func RunWithBuildInfo(workdir string, args []string, build BuildInfo) (string, e
 func installPlugins(workdir string, args []string) (string, error) {
 	if len(args) > 0 {
 		switch args[0] {
+		case "sync":
+			return syncPluginPackages(workdir, args[1:])
 		case "tui":
 			return pluginTUICommand(workdir, args[1:])
 		case "status", "updates", "add", "update", "remove":
@@ -171,7 +181,7 @@ func installPlugins(workdir string, args []string) (string, error) {
 		return "", fmt.Errorf("unknown scope %q; expected project, user, or local", opts.scope)
 	}
 
-	config, err := loadPlugins(filepath.Join(workdir, ".ai", "plugins.yaml"))
+	config, err := loadResolvedPlugins(workdir)
 	if err != nil {
 		return "", err
 	}
@@ -402,6 +412,7 @@ Usage:
   ai-sync catalog [--orca] <project-dir>
   ai-sync tui <project-dir>
   ai-sync plugins [--scope project|user|local] [--dry-run]
+  ai-sync plugins sync <project-dir> [--update] [--dry-run]
   ai-sync plugins tui <project-dir>
   ai-sync plugins status <project-dir>
   ai-sync plugins updates <project-dir> [--refresh]
@@ -448,6 +459,8 @@ Examples:
   ai-sync tui /path/to/project
   ai-sync plugins
   ai-sync plugins --dry-run
+  ai-sync plugins sync .
+  ai-sync plugins sync . --update
   ai-sync plugins status .
   ai-sync plugins tui .
   ai-sync plugins updates .
@@ -565,6 +578,7 @@ type source struct {
 	Skills  []skill
 	// Skills of local plugins. Claude loads them through the plugin itself.
 	PluginSkills []skill
+	PluginMCP    mcpConfig
 }
 
 type mcpConfig struct {
@@ -694,7 +708,7 @@ func loadSource(workdir string) (source, error) {
 		}
 	}
 
-	plugins, err := loadPlugins(filepath.Join(root, "plugins.yaml"))
+	plugins, err := loadResolvedPlugins(workdir)
 	if err != nil {
 		return source{}, err
 	}
@@ -732,7 +746,11 @@ func loadSource(workdir string) (source, error) {
 		return source{}, err
 	}
 
-	return source{Root: workdir, Project: project, Targets: targets, Rules: rules, MCP: mcp, Plugins: plugins, Hooks: hooks, Agents: agents, Skills: skills, PluginSkills: pluginSkills}, nil
+	pluginMCP, err := loadPluginProjectMCP(workdir, plugins, mcp)
+	if err != nil {
+		return source{}, err
+	}
+	return source{PluginMCP: pluginMCP, Root: workdir, Project: project, Targets: targets, Rules: rules, MCP: mcp, Plugins: plugins, Hooks: hooks, Agents: agents, Skills: skills, PluginSkills: pluginSkills}, nil
 }
 
 func readRequiredText(path string) (string, error) {
@@ -1220,6 +1238,14 @@ func renderTarget(target string, source source) ([]generatedFile, error) {
 
 func withPluginSkills(source source) source {
 	source.Skills = append(append([]skill(nil), source.Skills...), source.PluginSkills...)
+	servers := map[string]mcpServer{}
+	for name, server := range source.MCP.Servers {
+		servers[name] = server
+	}
+	for name, server := range source.PluginMCP.Servers {
+		servers[name] = server
+	}
+	source.MCP = mcpConfig{Servers: servers}
 	return source
 }
 
